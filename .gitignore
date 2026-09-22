@@ -3,3 +3,4 @@ __pycache__/
 .cache/
 .claude/settings.local.json
 results/
+tbench-traces/
