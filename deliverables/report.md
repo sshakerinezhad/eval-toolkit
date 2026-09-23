@@ -1,5 +1,7 @@
 # Qwen3.5-397B on Terminal-Bench 2.1: trained vs untrained
 
+**In one line: training bred a more careful model, not a more capable one.** It claims "done" falsely less often (34.5% vs 42.0% of its completion claims fail), tests the real requirement before finishing, and sets up interactive programs properly (qemu tasks 6/6 vs 1/6). That makes it pass more single runs (pass@1 55.4% vs 50.6%, +4.9 points, 95% CI +0.4 to +9.7). It solves about the same set of tasks (pass@3 67.4% vs 64.0%, CI −2.2 to +9.0). Once a run locks up its terminal, neither variant recovers.
+
 **Setup.** Same model, two versions: *untrained* (`qwen35-397b-a17b-base`) and *trained* (`qwen35-397b-a17b-gs264`, post-trained). Same harness (Terminus: the model types commands into a terminal), same 89 tasks, 3 attempts ("runs") per task each, temperature 0.6. 534 runs total. Each run is pass/fail by hidden tests.
 
 **Method.** Everything below is computed by `report.py` from fields already in the traces: no LLM judge, no API calls. Numbers come from `results/report_Qwen3p5-397B/metrics.json`; every run's label is in `results.jsonl`. Confidence intervals (CI) are 95%, from resampling tasks (10,000 draws, seed 0), and the trained/untrained comparison is always *paired* (same task vs same task).
@@ -12,7 +14,7 @@
 
 ## 1. Did the model get better?
 
-**Yes, a little. The gain is real but small, and trial noise is large.**
+**Yes, in reliability rather than reach. It passes more single runs on tasks it could already sometimes do, and it solves few new tasks. The gain is real but small, and trial noise is large.**
 
 | | Trained | Untrained | Difference (paired) |
 |---|---|---|---|
