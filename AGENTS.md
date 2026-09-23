@@ -34,3 +34,7 @@ When updating plans be sure to include what was done and why in *just* enough de
 ### Two-Pass Thinking
 When making decision critique your own work. Does this make sense? What could go wrong?
 When things break: after fixing, briefly explain why it happened and what I should know to catch it earlier.
+## Learned
+- Bash heredocs with apostrophes break here; use Write tool for source files.
+- Live-test failure paths, not just happy path; mocks passed before every real bug was found.
+- Cache is the recovery mechanism; any model call goes through `llm.call()` + cache.
