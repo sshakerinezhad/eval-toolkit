@@ -1,0 +1,21 @@
+# Run config. Everything here applies to EVERY model in `models`.
+# Run:   python run.py configs/example.yaml --name my_first_run
+# Smoke: python smoke.py configs/example.yaml
+
+tasks: data/example_tasks.jsonl      # one JSON object per line: {"id": ..., "prompt": ..., <anything else -> metadata>}
+
+models:                              # provider:model  (providers: openai, anthropic, openrouter)
+  - openai:gpt-5-mini
+  - anthropic:claude-haiku-4-5
+
+system_prompt: |
+  You are a careful assistant. Answer concisely.
+
+temperature: 0.7                     # omit or set null to let the model use its default
+                                     # (OpenAI gpt-5*/o* reasoning models drop it automatically)
+max_tokens: 1024
+
+n_samples: 1                         # samples per (task, model); sample_index 0..n-1 in output
+workers: 4                           # concurrent calls PER MODEL
+max_retries: 4                       # retries on 429/5xx/timeouts (CLI: --max-retries)
+timeout: 60                          # seconds per call (CLI: --timeout)

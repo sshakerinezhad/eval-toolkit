@@ -1,0 +1,3 @@
+{"id": "ex-1", "prompt": "What is 17 * 23? Reply with just the number.", "category": "arithmetic", "gold": "391"}
+{"id": "ex-2", "prompt": "Name the capital of Australia in one word.", "category": "geography", "gold": "Canberra"}
+{"id": "ex-3", "prompt": "Give one synonym for 'rapid'.", "category": "language"}

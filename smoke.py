@@ -1,77 +1,41 @@
-"""P1a smoke test: one chat call per provider whose key is set in .env.
+"""Smoke test: one tiny call per model through the SAME client path the runner uses.
 
-Run:  python smoke.py
-Blank keys are skipped. Override a model with OPENAI_MODEL / ANTHROPIC_MODEL /
-GEMINI_MODEL / OPENROUTER_MODEL in .env if a default name is rejected.
+    python smoke.py configs/x.yaml            # every model in that run config
+    python smoke.py --model openai:gpt-5-mini --model anthropic:claude-haiku-4-5
+
+Exit 0 if all pass, 1 otherwise. Never touches the cache. Costs a few tokens per model.
 """
-import os
-from dotenv import load_dotenv
+from __future__ import annotations
 
-load_dotenv()
-PROMPT = "Reply with the single word OK."
+import argparse
+import asyncio
+import sys
 
-
-def openai_call():
-    from openai import OpenAI
-    client = OpenAI()
-    r = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
-        messages=[{"role": "user", "content": PROMPT}],
-    )
-    return r.choices[0].message.content
+import llm
+import run
 
 
-def anthropic_call():
-    import anthropic
-    client = anthropic.Anthropic()
-    r = client.messages.create(
-        model=os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5"),
-        max_tokens=16,
-        messages=[{"role": "user", "content": PROMPT}],
-    )
-    return "".join(b.text for b in r.content if b.type == "text")
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("config", nargs="?", help="run config yaml; its models are smoked")
+    ap.add_argument("--model", action="append", default=[], help="provider:model (repeatable)")
+    ap.add_argument("--timeout", type=float, default=60)
+    args = ap.parse_args(argv)
 
+    specs = list(args.model)
+    if args.config:
+        specs += run.load_config(args.config, {}).models
+    if not specs:
+        ap.error("give a config file or at least one --model")
 
-def gemini_call():
-    from google import genai
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    r = client.models.generate_content(
-        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-        contents=PROMPT,
-    )
-    return r.text
+    results = asyncio.run(llm.smoke(specs, args.timeout))
+    passed = 0
+    for r in results:
+        passed += r.ok
+        print(r.line())
+    print(f"\n{passed}/{len(results)} models passed")
+    return 0 if passed == len(results) else 1
 
-
-def openrouter_call():
-    from openai import OpenAI
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.environ["OPENROUTER_API_KEY"],
-    )
-    r = client.chat.completions.create(
-        model=os.getenv("OPENROUTER_MODEL", "openai/gpt-5-mini"),
-        messages=[{"role": "user", "content": PROMPT}],
-    )
-    return r.choices[0].message.content
-
-
-PROVIDERS = [
-    ("openai", "OPENAI_API_KEY", openai_call),
-    ("anthropic", "ANTHROPIC_API_KEY", anthropic_call),
-    ("gemini", "GEMINI_API_KEY", gemini_call),
-    ("openrouter", "OPENROUTER_API_KEY", openrouter_call),
-]
 
 if __name__ == "__main__":
-    passed = 0
-    for name, env, fn in PROVIDERS:
-        if not os.getenv(env):
-            print(f"{name:11s} SKIP  ({env} blank)")
-            continue
-        try:
-            out = (fn() or "").strip()
-            print(f"{name:11s} OK    -> {out[:40]!r}")
-            passed += 1
-        except Exception as e:  # noqa: BLE001 - report everything, this is a smoke test
-            print(f"{name:11s} FAIL  {type(e).__name__}: {str(e)[:160]}")
-    print(f"\n{passed}/4 providers passed")
+    sys.exit(main())
