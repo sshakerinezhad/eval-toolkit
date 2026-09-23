@@ -263,3 +263,26 @@ def test_smoke_fails_when_key_missing(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     [r] = asyncio.run(llm.smoke(["openrouter:x/y"], timeout=10))
     assert r.ok is False and r.error.type == "MissingAPIKey"
+
+
+# ---------- extra_body passthrough (grader needs reasoning_effort) ----------
+
+def test_build_params_extra_body_is_forwarded():
+    p = llm.build_params("anthropic", "claude-opus-5-5", None, 100, extra_body={"reasoning_effort": "high"})
+    assert p == {"max_tokens": 100, "extra_body": {"reasoning_effort": "high"}}
+
+
+def test_build_params_extra_body_none_leaves_params_unchanged():
+    assert llm.build_params("anthropic", "claude-opus-5-5", None, 100, extra_body=None) == {"max_tokens": 100}
+
+
+def test_cache_key_unchanged_when_extra_body_none_and_changes_when_set():
+    base = llm.cache_key("openai", "m", "s", "p", 0, 0.5, 10)
+    assert llm.cache_key("openai", "m", "s", "p", 0, 0.5, 10, extra_body=None) == base
+    assert llm.cache_key("openai", "m", "s", "p", 0, 0.5, 10, extra_body={"reasoning_effort": "high"}) != base
+
+
+def test_call_sends_extra_body_to_sdk():
+    client = FakeClient([_resp("ok")])
+    _call(client, extra_body={"reasoning_effort": "high"})
+    assert client.chat.completions.calls[0]["extra_body"] == {"reasoning_effort": "high"}

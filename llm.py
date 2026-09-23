@@ -72,26 +72,34 @@ def make_client(provider: str, timeout: float) -> AsyncOpenAI:
     return AsyncOpenAI(api_key=key, base_url=base_url, timeout=timeout, max_retries=0)
 
 
-def build_params(provider: str, model: str, temperature: float | None, max_tokens: int) -> dict:
-    """Exactly what gets sent. Reasoning adapt lives here and nowhere else."""
+def build_params(provider: str, model: str, temperature: float | None, max_tokens: int,
+                 extra_body: dict | None = None) -> dict:
+    """Exactly what gets sent. Reasoning adapt lives here and nowhere else.
+
+    extra_body: provider-specific fields the OpenAI SDK forwards verbatim (e.g. reasoning_effort).
+    """
     if provider == "openai" and model.startswith(REASONING_PREFIXES):
-        return {"max_completion_tokens": max_tokens}
-    params: dict = {}
-    if temperature is not None:
-        params["temperature"] = temperature
-    params["max_tokens"] = max_tokens
+        params: dict = {"max_completion_tokens": max_tokens}
+    else:
+        params = {}
+        if temperature is not None:
+            params["temperature"] = temperature
+        params["max_tokens"] = max_tokens
+    if extra_body:
+        params["extra_body"] = dict(extra_body)
     return params
 
 
 # ---------- cache ----------
 
 def cache_key(provider: str, model: str, system_prompt: str, prompt: str,
-              sample_index: int, temperature: float | None, max_tokens: int) -> str:
-    sig = json.dumps(
-        {"provider": provider, "model": model, "system_prompt": system_prompt, "prompt": prompt,
-         "sample_index": sample_index, "temperature": temperature, "max_tokens": max_tokens},
-        sort_keys=True, ensure_ascii=False,
-    )
+              sample_index: int, temperature: float | None, max_tokens: int,
+              extra_body: dict | None = None) -> str:
+    sig_d = {"provider": provider, "model": model, "system_prompt": system_prompt, "prompt": prompt,
+             "sample_index": sample_index, "temperature": temperature, "max_tokens": max_tokens}
+    if extra_body:  # only added when present so keys minted before this field existed stay valid
+        sig_d["extra_body"] = extra_body
+    sig = json.dumps(sig_d, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(sig.encode("utf-8")).hexdigest()
 
 
@@ -163,8 +171,9 @@ def _backoff(attempt: int) -> float:
 
 
 async def call(client, provider: str, model: str, system_prompt: str, prompt: str,
-               temperature: float | None, max_tokens: int, max_retries: int) -> CallResult:
-    params = build_params(provider, model, temperature, max_tokens)
+               temperature: float | None, max_tokens: int, max_retries: int,
+               extra_body: dict | None = None) -> CallResult:
+    params = build_params(provider, model, temperature, max_tokens, extra_body)
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
