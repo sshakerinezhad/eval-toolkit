@@ -38,3 +38,8 @@ When things break: after fixing, briefly explain why it happened and what I shou
 - Bash heredocs with apostrophes break here; use Write tool for source files.
 - Live-test failure paths, not just happy path; mocks passed before every real bug was found.
 - Cache is the recovery mechanism; any model call goes through `llm.call()` + cache.
+
+## Timeline rule
+- Commit after every working change, small commits, plain short human messages. The git log is the record of the session.
+- Mark run-sheet minutes with empty commits: `git commit --allow-empty -m "clock: minute 70 stop"`. Also: "clock: start", "clock: build start", "clock: email sent".
+- Debrief reads: `git log --format='%ad %s' --date=format:%H:%M`
