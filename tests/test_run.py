@@ -140,6 +140,40 @@ def test_load_tasks_rejects_bad_rows(tmp_path, rows, msg):
         run.load_tasks(_write_tasks(tmp_path, rows))
 
 
+def _write_apex(tmp_path, rows):
+    import csv
+    p = tmp_path / "train.csv"
+    with open(p, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["Task ID", "Domain", "Prompt", "Rubric JSON", "File Attachments"])
+        w.writerows(rows)
+    return p
+
+
+def test_load_apex_csv_prompt_then_docs_in_order(tmp_path):
+    d = tmp_path / "documents" / "7"
+    d.mkdir(parents=True)
+    (d / "b data.csv").write_bytes(b"\xef\xbb\xbfx,y\r\n1,2\r\n")  # BOM + CRLF, as some APEX files have
+    (d / "a.csv").write_text("k\n9\n", encoding="utf-8")
+    p = _write_apex(tmp_path, [
+        # row 1 is outside the subset and its file is missing: must not be touched
+        [1, "Legal", "ignore me", "{}", "documents/1/gone.pdf"],
+        [7, "Finance", "Use b data.csv.", '{"criterion 1": {}}', "documents/7/b data.csv\ndocuments/7/a.csv"],
+    ])
+    [t] = run.load_tasks(p, [7])
+    assert t["id"] == 7
+    assert t["prompt"] == ("Use b data.csv.\n\n==== Attached files content: ====\n\n"
+                           "=== b data.csv ===\nx,y\n1,2\n\n=== a.csv ===\nk\n9")
+    assert t["metadata"] == {"domain": "Finance", "prompt_raw": "Use b data.csv.",
+                             "attachments": ["documents/7/b data.csv", "documents/7/a.csv"]}
+
+
+def test_load_apex_csv_missing_attachment_dies_naming_task_and_file(tmp_path):
+    p = _write_apex(tmp_path, [[7, "Finance", "q", "{}", "documents/7/nope.csv"]])
+    with pytest.raises(SystemExit, match=r"task 7: attachment not found: .*nope\.csv"):
+        run.load_tasks(p)
+
+
 # ---------- build_jobs ----------
 
 def test_build_jobs_is_tasks_x_models_x_samples(tmp_path):

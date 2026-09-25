@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import json
 import subprocess
 import sys
@@ -52,6 +53,7 @@ class RunConfig:
     workers: int = 4       # per model
     max_retries: int = 4
     timeout: float = 60    # seconds per call
+    task_ids: list | None = None  # run only these ids (in file order); None = all
 
 
 def load_config(path: str | Path, overrides: dict) -> RunConfig:
@@ -92,12 +94,78 @@ def load_config(path: str | Path, overrides: dict) -> RunConfig:
         die(f"max_retries must be an integer >= 0, got {cfg.max_retries!r}")
     if not isinstance(cfg.timeout, (int, float)) or cfg.timeout <= 0:
         die(f"timeout must be a positive number, got {cfg.timeout!r}")
+    if cfg.task_ids is not None and (not isinstance(cfg.task_ids, list) or not cfg.task_ids):
+        die("task_ids must be a non-empty list or omitted")
     if not Path(cfg.tasks).exists():
         die(f"tasks file not found: {cfg.tasks}")
     return cfg
 
 
-def load_tasks(path: str | Path) -> list[dict]:
+def load_tasks(path: str | Path, task_ids: list | None = None) -> list[dict]:
+    """Pick loader by extension, then keep only `task_ids` (unknown id -> die)."""
+    path = Path(path)
+    if path.suffix == ".csv":
+        return _load_apex_csv(path, task_ids)
+    return _select(_load_jsonl(path), task_ids, lambda t: t["id"], path)
+
+
+def _select(items: list, task_ids: list | None, get_id, path: Path) -> list:
+    """Keep items whose id is in task_ids (file order). Unknown id -> die. json.dumps so 1 != "1"."""
+    if task_ids is None:
+        return items
+    have = {json.dumps(get_id(x)) for x in items}
+    unknown = [i for i in task_ids if json.dumps(i) not in have]
+    if unknown:
+        die(f"{path}: task_ids not found: {unknown}")
+    want = {json.dumps(i) for i in task_ids}
+    return [x for x in items if json.dumps(get_id(x)) in want]
+
+
+# APEX attachments are inlined as text; anything else (pdf/docx/xlsx) needs native file parts, not built yet.
+TEXT_ATTACHMENTS = {".csv", ".txt", ".md", ".json"}
+
+
+def _load_apex_csv(path: Path, task_ids: list | None) -> list[dict]:
+    """APEX-v1 train.csv -> tasks. Rubric JSON is deliberately never loaded (grading is separate).
+
+    Prompt layout mirrors Mercor's harness: task prompt, then each attached file's text under its bare
+    filename (prompts refer to files by bare name, e.g. "orders.csv").
+    """
+    required = {"Task ID", "Domain", "Prompt", "File Attachments"}
+    with open(path, encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        missing = required - set(reader.fieldnames or [])
+        if missing:
+            die(f"{path}: missing columns {sorted(missing)}")
+        rows = list(reader)
+    ids = [int(r["Task ID"]) for r in rows]
+    if len(set(ids)) != len(ids):
+        die(f"{path}: duplicate Task ID")
+    # filter BEFORE touching attachments: rows outside the subset may reference files not on disk
+    tasks = []
+    for row in _select(rows, task_ids, lambda r: int(r["Task ID"]), path):
+        tid = int(row["Task ID"])
+        rels = [p.strip() for p in row["File Attachments"].splitlines() if p.strip()]
+        parts = [row["Prompt"]]
+        if rels:
+            parts.append("==== Attached files content: ====")
+        for rel in rels:
+            f = path.parent / rel
+            if f.suffix.lower() not in TEXT_ATTACHMENTS:
+                die(f"task {tid}: attachment {rel} is {f.suffix or 'no extension'}; only text types "
+                    f"{sorted(TEXT_ATTACHMENTS)} are supported")
+            if not f.is_file():
+                die(f"task {tid}: attachment not found: {f}")
+            # utf-8-sig drops the BOM some APEX CSVs carry; read_text normalises CRLF -> LF
+            parts.append(f"=== {f.name} ===\n{f.read_text(encoding='utf-8-sig').rstrip()}")
+        tasks.append({"id": tid, "prompt": "\n\n".join(parts),
+                      "metadata": {"domain": row["Domain"], "prompt_raw": row["Prompt"], "attachments": rels}})
+    if not tasks:
+        die(f"{path}: no tasks")
+    return tasks
+
+
+def _load_jsonl(path: Path) -> list[dict]:
     """Each row -> {"id", "prompt", "metadata": {everything else}}."""
     tasks, seen = [], set()
     for n, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
@@ -385,7 +453,7 @@ def _main(argv: list[str] | None) -> int:
 
     cfg = load_config(args.config, {"max_retries": args.max_retries, "timeout": args.timeout})
     args.name = resolve_run_name(args.name, args.yes)  # before smoke: a name clash must not cost a call
-    tasks = load_tasks(cfg.tasks)
+    tasks = load_tasks(cfg.tasks, cfg.task_ids)
     jobs = build_jobs(cfg, tasks)
     pricing = load_pricing()
 
