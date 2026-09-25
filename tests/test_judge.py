@@ -214,3 +214,11 @@ def test_score_duplicate_reply_dies(tmp_path):
     raw.write_text(raw.read_text(encoding="utf-8") + json.dumps(_raw_row("t1", "A", "{}")) + "\n", encoding="utf-8")
     with pytest.raises(SystemExit, match="twice"):
         judge.score(raw)
+
+def test_load_prompt_strips_provenance_header(tmp_path):
+    p = tmp_path / "x.md"
+    p.write_text("<!-- source: mine, 2026-09-25 -->\nThe prompt.", encoding="utf-8")
+    assert judge.load_prompt(p) == "The prompt."
+    p.write_text("<!-- source: mine -->\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="empty"):
+        judge.load_prompt(p)

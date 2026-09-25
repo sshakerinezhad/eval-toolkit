@@ -1,3 +1,4 @@
+<!-- source: mine, 2026-09-24, drafted with Claude Code -->
 You are given one agent trajectory: the task it was given, its last turns, and the test output.
 Pick exactly one category from the list below.
 Reply with one JSON object and nothing else:

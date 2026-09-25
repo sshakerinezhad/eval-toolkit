@@ -41,6 +41,8 @@ def load_prompt(path: str | Path) -> str:
     if not path.exists():
         die(f"prompt not found: {path}")
     text = path.read_text(encoding="utf-8-sig").strip()
+    if text.startswith("<!--"):  # provenance header, never sent to the model
+        text = text.split("-->", 1)[1].strip()
     if not text:
         die(f"{path}: prompt is empty")
     return text
