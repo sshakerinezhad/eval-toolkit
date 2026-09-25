@@ -1,0 +1,24 @@
+# APEX-v1 subset: 30 CSV-attachment tasks (Consulting 20, Finance 10; no Legal/Medicine).
+# Run:   python run.py configs/apex.yaml --name <name>
+# Smoke: python smoke.py configs/apex.yaml
+#
+# Prompt sent = task prompt + "==== Attached files content: ====" + one "=== <filename> ===" block per file.
+# Rubric JSON is never loaded. Reserve (also CSV-only): 804, 1122, 1150, 1169, 2121, 2266, 2315
+
+tasks: apex-v1/data/train.csv
+task_ids: [145, 283, 352, 772, 828, 1080, 1091, 1149, 1166, 1170, 1171, 1172, 1188, 1192, 1242,
+           1259, 1265, 1269, 1288, 1384, 2107, 2157, 2192, 2205, 2228, 2230, 2232, 2294, 2302, 2308]
+
+models:
+  - openai:gpt-5.6-luna
+  - openai:gpt-5.6-sol
+
+system_prompt: |
+  You are a helpful assistant.
+
+# temperature omitted: reasoning models reject it (llm.build_params drops it for openai:gpt-5* anyway)
+max_tokens: 32000      # sent as max_completion_tokens; includes hidden reasoning tokens, so keep it large
+n_samples: 1
+workers: 8             # concurrent calls PER MODEL
+max_retries: 4
+timeout: 600           # seconds per call; long reasoning over ~25k-token inputs can take minutes

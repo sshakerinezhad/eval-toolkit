@@ -1,0 +1,20 @@
+# APEX-v1 judge. Tasks come from: python grade.py build
+# Run:   python run.py configs/apex_grade.yaml --name grade_v1/judge
+# Score: python grade.py score results/grade_v1/judge/raw.jsonl
+#
+# Judge prompt (prompts/apex_judge.md, Mercor's verbatim) is at the top of each task's user message;
+# run.py configs can't load a system prompt from a file, so system_prompt stays empty.
+
+tasks: results/grade_v1/tasks.jsonl
+
+models:
+  - openrouter:google/gemini-2.5-flash
+
+system_prompt: ""
+
+# temperature omitted: not sent
+max_tokens: 2000
+n_samples: 1
+workers: 16
+max_retries: 4
+timeout: 120

@@ -1,33 +1,58 @@
 # Scratchpad — session handoff
 
-## Last session (2026-09-23): inference runner built, verified, shipped
+## This session (2026-09-24): APEX-v1 runner for gpt-5.6-luna / gpt-5.6-sol
 
-Archived full plan + completion record (what was built, every test run, live results, deviations) to
-`.claude/changelog/2026-09-23-inference-runner.md`. Read that first.
+**Goal:** run APEX-v1 `apex-v1/data/train.csv` tasks through `openai:gpt-5.6-luna` + `openai:gpt-5.6-sol`,
+save task id, domain, prompt sent, full response, errors. Rubric deliberately dropped (grading later).
+Plan: `C:\Users\User\.claude\plans\we-re-gonna-set-up-vivid-bee.md` (user-approved CUT scope).
 
-**State:** done and committed to main. `llm.py` (one call) + `run.py` (one run) + `smoke.py` CLI +
-`pricing.json` + `configs/`, `data/`, `tests/` (79 mocked tests, `python -m pytest tests -q`).
-Live-verified: happy path, cache reruns, 401/404/truncation, kill-switch (fatal + 4-consecutive),
-Ctrl-C + resume. User's real runs live in `results/live1`, `results/live2` (gitignored).
+**State: built, tests green (124 passed), live 2-task test done. NOT committed** (branch `mock2`; also
+pre-existing uncommitted `.gitignore` change adding `apex-v1/`).
 
-**Usage:**
-```
-python smoke.py configs/x.yaml              # one tiny call per model, same client path as runner
-python run.py configs/x.yaml --name NAME    # dashboard + estimate, y/N, results/NAME/{run.json,raw.jsonl}
-```
+**Built (why in parens):**
+- `run.py`: `RunConfig.task_ids` subset filter; `load_tasks(path, task_ids)` dispatches `.csv` ->
+  `_load_apex_csv`, `.jsonl` -> `_load_jsonl` (old logic); shared `_select()` (unknown id -> die).
+  Filter runs BEFORE attachments are read (63/100 rows reference PDFs not on disk; first draft died on them).
+  Prompt = task prompt + `\n\n==== Attached files content: ====\n\n` + `=== <bare filename> ===\n<text>`
+  blocks joined by blank lines (user-specified Mercor harness format; bare name because 6/30 prompts cite
+  files by bare name). Attachments read `utf-8-sig` (some BOM) + read_text normalises CRLF. Missing or
+  non-text attachment (.pdf/.docx/.xlsx) -> die naming task+file. metadata = {domain, prompt_raw, attachments}.
+- `llm.py`: `FATAL_CODES = {"insufficient_quota"}` -> fatal, not retried (it's a 429 that never recovers).
+- `configs/apex.yaml` (30 ids, reserve 7 in comment), `configs/apex_test3.yaml` (145, 2205, 2302).
+  No temperature; max_tokens 32000 (includes hidden reasoning); timeout 600; workers 8; retries 4;
+  system prompt "You are a helpful assistant." (placeholder, user never confirmed wording).
+- `tests/test_run.py`: +2 tests (prompt-then-docs order incl. BOM/CRLF + out-of-subset missing file ignored;
+  missing attachment dies).
 
-**Key decisions (why):**
-- OpenAI SDK only; Anthropic via its OpenAI-compat endpoint. One client type, three base URLs.
-- SDK retries OFF (`max_retries=0`); own retry loop so every attempt is logged in `errors`.
-- Cache key = provider+model+system+prompt+sample_index+temp+max_tokens (NOT task id). Successes only.
-- Per-model semaphore (rate limits are per provider). Kill: 401/403 instant; 4 consecutive non-retryable.
-- `temperature` nullable; OpenAI gpt-5*/gpt-6*/o* auto-drop temp + use `max_completion_tokens`.
-- One results folder per run, append-only `raw.jsonl`, `run.json` snapshot written before first call.
+**Cache:** unchanged key (provider+model+system+prompt+sample+temp+max_tokens). Docs are inlined into
+`prompt`, so file contents are in the key automatically: edit a CSV -> only that task reruns.
 
-**Pending / not done:**
-- archive-plan skill step 5 (CLAUDE.md learnings) — proposed to user in chat, NOT applied, awaiting approval.
-- No grader/judge yet. `llm.call()` + cache designed to be reused for that.
-- `pricing.json` Anthropic ids were inferred from display names; verify when a new model is used.
+**Data facts:** train.csv 100 rows (Task ID, Domain, Prompt, Rubric JSON, File Attachments = newline paths
+relative to `apex-v1/data/`). Only 40 CSV attachments on disk; 63 tasks have zero files present (PDFs etc).
+Subset 30 + reserve 7 are all CSV-only, all present. Subset = Consulting 20 + Finance 10, NO Legal/Medicine.
+Reserve: 804, 1122, 1150, 1169, 2121, 2266, 2315.
 
-**User prefs learned (also in auto-memory):** few files over many; after plan approval run all steps
-without pausing; never execute paid API calls, user runs them and watches; ask, don't invent.
+**Live test (user said "just run it"):** 2205 + 2302 x both models, NO cache, via scratch script calling
+`llm.call` directly (scratch file lives in temp dir, will be gone). Output: `results/tests/apex_test2/`
+(`raw.jsonl` + one `.md` per response). All 4 ok, finish=stop, 0 retries, ~$0.57 total.
+Findings: output mostly hidden reasoning (luna 4.4k tokens -> 915 visible chars); chars/4 estimate ~2x LOW
+for numeric CSVs (2302: est 17.6k, real 38,450 in) -> dashboard underestimates input cost; sol 218s on 2302.
+
+**Pending / next:**
+- `--no-cache` flag on run.py: proposed, user REJECTED the edit mid-way; don't add unless asked.
+- Full 30-task run: `python run.py configs/apex.yaml --name <name>` (user decides/runs).
+- Commit this work (user hasn't asked yet).
+- Deferred by user ("not now"): error categories, `turns` field, attachment sha256, more tests,
+  work-plan update, PDF native file parts (needed if non-CSV tasks ever used).
+- Maybe: better token estimate for CSV-heavy prompts.
+
+**User prefs this session:** wants terse, action over questions; got frustrated at repeated confirmation
+asks. Explicitly told me to run the paid live test myself this time (memory says user runs live calls;
+treat "just run it" as override for that instance). Pasted cut-list = approval format they use.
+
+## Previous session (2026-09-23): inference runner
+Details in `.claude/changelog/2026-09-23-inference-runner.md`. `llm.py` (one call: providers via OpenAI SDK,
+own retry loop, disk cache `.cache/`, smoke) + `run.py` (one run: dashboard/estimate, per-model semaphore,
+kill-switch 401/403 instant or 4 consecutive non-retryable, append-only `results/<name>/raw.jsonl` + run.json).
+Since then also committed: `metrics.py` (pass@k, pass^k, paired bootstrap) and `judge.py` (LLM-judge tasks
+from traces). `pricing.json` Anthropic ids inferred from display names; verify on use.
