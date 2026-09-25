@@ -1,0 +1,20 @@
+# 3-task check of configs/apex.yaml, same settings. 145 Consulting (1 file), 2205 Finance (tiny),
+# 2302 Finance (2 files: exercises multi-attachment order).
+# Smoke: python smoke.py configs/apex_test3.yaml
+# Run:   python run.py configs/apex_test3.yaml --name apex_test3
+
+tasks: apex-v1/data/train.csv
+task_ids: [145, 2205, 2302]
+
+models:
+  - openai:gpt-5.6-luna
+  - openai:gpt-5.6-sol
+
+system_prompt: |
+  You are a helpful assistant.
+
+max_tokens: 32000
+n_samples: 1
+workers: 8
+max_retries: 4
+timeout: 600
