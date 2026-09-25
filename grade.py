@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -109,8 +110,11 @@ def parse_verdict(text: str | None) -> tuple[bool | None, str]:
     if m:
         s = m.group(1).strip()
     try:
-        obj = json.loads(s)
+        obj = json.loads(s, strict=False)
     except json.JSONDecodeError:
+        m = re.search(r'"is_criteria_true"\s*:\s*(true|false)', s)
+        if m:
+            return m.group(1) == "true", ""
         return None, text.strip()[:300]
     if not isinstance(obj, dict) or not isinstance(obj.get("is_criteria_true"), bool):
         return None, text.strip()[:300]
