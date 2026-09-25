@@ -37,6 +37,8 @@ REASONING_PREFIXES = ("gpt-5", "gpt-6", "o1", "o3", "o4")
 
 RETRYABLE_STATUS = {408, 429} | set(range(500, 600))
 FATAL_STATUS = {401, 403}  # bad key / no access: never retry, kill the run
+# Out of credit arrives as a 429 but will never recover by waiting: treat like a bad key.
+FATAL_CODES = {"insufficient_quota"}
 
 CACHE_DIR = Path(".cache")
 BACKOFF_BASE = 2.0
@@ -130,7 +132,7 @@ class CallResult:
     finish_reason: str | None
     errors: list[Attempt] = field(default_factory=list)
     params_sent: dict = field(default_factory=dict)
-    fatal: bool = False  # 401/403 seen
+    fatal: bool = False  # 401/403 or insufficient_quota seen
 
 
 def _classify(exc: BaseException, attempt: int) -> Attempt:
@@ -141,7 +143,7 @@ def _classify(exc: BaseException, attempt: int) -> Attempt:
         code = (body.get("error") or {}).get("code") if isinstance(body.get("error"), dict) else body.get("code")
     if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)):
         retryable = True
-    elif status in FATAL_STATUS:
+    elif status in FATAL_STATUS or code in FATAL_CODES:
         retryable = False
     else:
         retryable = status in RETRYABLE_STATUS
@@ -177,7 +179,7 @@ async def call(client, provider: str, model: str, system_prompt: str, prompt: st
         except Exception as exc:  # noqa: BLE001 - every failure must be recorded, never swallowed
             a = _classify(exc, attempt)
             result.errors.append(a)
-            if a.status in FATAL_STATUS:
+            if a.status in FATAL_STATUS or a.code in FATAL_CODES:
                 result.fatal = True
                 return result
             if not a.retryable or attempt > max_retries:
