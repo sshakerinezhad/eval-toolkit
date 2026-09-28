@@ -35,3 +35,11 @@ def test_unknown_suffix_dies(tmp_path):
     (tmp_path / "x.parquet").write_bytes(b"0")
     with pytest.raises(SystemExit, match="not supported"):
         peek.load(tmp_path / "x.parquet")
+
+
+def test_rows_over_the_cap_are_flagged(tmp_path, capsys):
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps({"id": 1, "trajectory": "x" * 250_000}) + "\n" + json.dumps({"id": 2, "trajectory": "y"}) + "\n")
+    peek.main([str(p), "--n", "1"])
+    out = capsys.readouterr().out
+    assert "longest trajectory: 250,000 chars (row 0)" in out and "OVER THE 200,000-CHAR CAP: 1 row(s)" in out

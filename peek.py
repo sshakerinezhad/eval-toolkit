@@ -1,7 +1,8 @@
 """PEEK. Look at a data file before touching it: python peek.py FILE [--n 5] [--seed 0] [--chars 200]
 
 jsonl (one object per line), json (a list, or an object of rows), or csv. Prints: row count, the fields with
-how many rows have each, the longest prompt-like field, attachment counts when a field looks like a file list,
+how many rows have each, the longest prompt-like field (prompt, trajectory, response, context...) with a warning
+when rows exceed run.py's 200,000-char attachment cap, attachment counts when a field looks like a file list,
 then n random rows, every field with its length and its text; a long field shows only its last --chars
 characters, since the end is where an answer usually is. Read only.
 """
@@ -15,7 +16,8 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
-PROMPT_KEYS = ("prompt", "question", "input", "task", "instruction")
+PROMPT_KEYS = ("prompt", "question", "input", "task", "instruction", "trajectory", "response", "context")
+CAP = 200_000  # run.py's attachment cap (attachments.MAX_CHARS); a field over it means a decision, not a default
 ATTACH_KEYS = ("attachments", "file attachments", "files", "documents")
 
 
@@ -79,6 +81,10 @@ def summary(rows: list[dict]) -> list[str]:
         lens = [len(_text(r.get(pk, ""))) for r in rows]
         i = max(range(len(rows)), key=lambda j: lens[j])
         out.append(f"longest {pk}: {lens[i]:,} chars (row {i}), mean {sum(lens) // len(lens):,}, shortest {min(lens):,}")
+        over = sum(l > CAP for l in lens)
+        if over:
+            out.append(f"OVER THE {CAP:,}-CHAR CAP: {over} row(s); run.py stops on files this size. Decide: "
+                       f"--max-attachment-chars N, filter, or drop them, and say which in the deliverable.")
     ak = next((k for k in fields if k.lower() in ATTACH_KEYS), None)
     if ak:
         counts = [_attachments(r.get(ak)) for r in rows]

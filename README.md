@@ -21,6 +21,12 @@ results/<judge>/              -> deliver.py    -> deliverables/, zip, email body
 Two entry points: with inference to run, start at `run.py`; with responses already given, write them in
 `raw.jsonl`'s shape (the loader prompt's fourth shape) and start at `grade.py build`.
 
+**Check lengths before any run.** `peek.py` prints the longest prompt-like field and flags rows over the
+attachment cap; the `run.py` dashboard prints a per-task attachment report. Anything over 200,000 characters
+per file stops the run on purpose: pass `--max-attachment-chars N` to raise the cap knowingly, filter the
+big files, or drop those tasks, and say which in the deliverable. A trajectory or ledger of 1M characters is
+250k tokens per call; decide, do not let a default decide.
+
 ## Commands, in order
 
 ```bash
