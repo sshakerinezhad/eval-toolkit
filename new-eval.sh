@@ -1,7 +1,7 @@
 #!/bin/sh
 # NEW EVAL. A fresh repo for one evaluation, made from this toolkit:  ./new-eval.sh NAME [--no-smoke]
 #
-# Copies the toolkit (code, tests, configs, prompts, .env) to ~/NAME; never prompts/local/ (that is prep, not the work),
+# Copies the toolkit (code, tests, configs, prompts incl. the gitignored prompts/local/, .env) to ~/NAME,
 # leaves behind git history, results, caches, datasets, venvs. Inits git on main, first commit, empty
 # results/, runs the tests and a smoke call, prints the clock start line and how long all this took.
 # Python: the toolkit's venv, activated by path (no new venv to build). Nothing is pushed: the gh line
@@ -16,7 +16,7 @@ START=$(date +%s)
 
 rsync -a \
   --exclude .git --exclude .venv --exclude results --exclude .cache --exclude __pycache__ --exclude .pytest_cache \
-  --exclude tbench-traces --exclude apex-sample --exclude apex-v1 --exclude 'deliverables*' --exclude .claude --exclude prompts/local --exclude demo.py --exclude tests/test_demo.py \
+  --exclude tbench-traces --exclude apex-sample --exclude apex-v1 --exclude 'deliverables*' --exclude .claude --exclude demo.py --exclude tests/test_demo.py \
   "$SRC/" "$DEST/"
 mkdir -p "$DEST/results"
 cd "$DEST"

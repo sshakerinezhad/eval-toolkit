@@ -11,7 +11,7 @@ def test_new_eval_makes_a_fresh_repo(tmp_path):
     assert r.returncode == 0, r.stderr + r.stdout
     d = tmp_path / "fresh"
     assert (d / "grade.py").exists() and (d / "tests").is_dir() and (d / "results").is_dir() and (d / ".gitignore").exists()
-    assert not (d / ".venv").exists() and not (d / ".claude").exists() and not (d / "prompts" / "local").exists() and not (d / "demo.py").exists()
+    assert not (d / ".venv").exists() and not (d / ".claude").exists() and (d / "prompts" / "local").is_dir() and not (d / "demo.py").exists()
     log = subprocess.run(["git", "-C", str(d), "log", "--oneline"], capture_output=True, text=True).stdout
     assert log.count("\n") == 1 and "init from eval-toolkit" in log
     assert "passed" in r.stdout and "ready:" in r.stdout and 'python clock.py "start"' in r.stdout
