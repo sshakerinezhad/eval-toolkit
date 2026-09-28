@@ -9,6 +9,7 @@ The data is at: [PATH]. The brief says: [ONE SENTENCE].
    - Runner tasks for run.py: one row per task, {"id", "prompt", "metadata": {...}}. Attached files go as text under the prompt, one "=== <filename> ===" block each, the way run.py's APEX loader does it. A file that is not text: stop and tell me its name and size. Do not guess its contents.
    - Rubrics for grade.py: {task_id: [{"id", "description", "weight", "depends_on"}, ...]} in rubric order. Carry weight and dependency fields when the data has them, else null.
    - Reference answers, if the data has them: {task_id: text}.
+   - Responses already given (no inference to run): one raw.jsonl line per response in run.py's shape, {"task_id", "model", "sample_index", "response", "metadata": {"prompt_raw": the task prompt}}, so grade.py build reads them as if run.py had made them.
    If the data does not fit these shapes (precomputed scores, trajectories, pairwise preferences, no rubric), do not force it: stop, propose the smallest mapping in three lines, and wait for my ok. Never invent a field the data does not have.
 
 3. Put it in loaders/<name>.py, one function per shape, a docstring that states the file format in three lines, and a test on two real rows in tests/test_loader_<name>.py. Wire it into run.py and grade.py build with the smallest change (by file extension or a --format flag).

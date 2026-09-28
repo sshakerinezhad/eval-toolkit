@@ -54,5 +54,5 @@ treat "just run it" as override for that instance). Pasted cut-list = approval f
 Details in `.claude/changelog/2026-09-23-inference-runner.md`. `llm.py` (one call: providers via OpenAI SDK,
 own retry loop, disk cache `.cache/`, smoke) + `run.py` (one run: dashboard/estimate, per-model semaphore,
 kill-switch 401/403 instant or 4 consecutive non-retryable, append-only `results/<name>/raw.jsonl` + run.json).
-Since then also committed: `metrics.py` (pass@k, pass^k, paired bootstrap) and `judge.py` (LLM-judge tasks
+Since then also committed: `metrics.py` (pass@k, pass^k, paired bootstrap) and `classifier.py` (LLM-judge tasks
 from traces). `pricing.json` Anthropic ids inferred from display names; verify on use.

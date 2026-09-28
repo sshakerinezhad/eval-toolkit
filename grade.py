@@ -37,7 +37,7 @@ chance: a judge that says Met on everything in a 90% Met set agrees 90% and has 
 failures: every criterion the judge marked not met (judge errors stay in their bucket) -> failures.md for
 hand reading (task, model, sample, criterion text, the judge's reason, a response excerpt) and, when
 --prompt names a classifier prompt with '- name: description' category lines (prompts/classify_criteria.md),
-failures.jsonl: one run.py task per failure in judge.py's row shape, so `python judge.py score RAW
+failures.jsonl: one run.py task per failure in classifier.py's row shape, so `python classifier.py score RAW
 --labels failure_labels.csv` gives the count table and "agrees with me on x of n" (failure_labels.csv: trajectory_id,
 category; trajectory_id is the failure id printed in failures.md). --label opens a terminal loop on a random
 n of the failures: criterion, judge reason, response excerpt, the numbered category list; type the number
@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import metrics
-from judge import FENCE, categories, load_prompt
+from classifier import FENCE, categories, load_prompt
 
 NO_RESPONSE = "(the model returned no response)"
 
@@ -485,7 +485,7 @@ def failures(raw: str | Path, out: str | Path | None = None, prompt: str | Path 
                             f"<RESPONSE>\n{f['response']}\n</RESPONSE>")} for f in fails]
         (out / "failures.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
         print(f"{len(rows)} classifier task(s) with categories {cats} -> {out / 'failures.jsonl'}; "
-              f"run them with run.py, then `python judge.py score <raw> --labels failure_labels.csv`")
+              f"run them with run.py, then `python classifier.py score <raw> --labels failure_labels.csv`")
         if label_n:
             label_failures(fails, cats, out / "failure_labels.csv", label_n, seed, excerpt, ask, say)
     elif label_n:

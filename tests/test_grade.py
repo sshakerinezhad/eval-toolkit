@@ -206,7 +206,7 @@ def test_gold_mode_graded_apart(tmp_path, capsys):
 
 
 def test_failures_md_and_classifier_tasks_scored_by_judge_py(tmp_path, capsys):
-    import judge
+    import classifier
     judged, _ = _judged(tmp_path, {**ALL_MET, "1|m|0|c2": False, "2|m|1|c1": False, "1|m|1|c1": "garbage"})
     n = grade.failures(judged, prompt="prompts/classify_criteria.md")
     assert n == 2  # the unparseable one is a judge error, not a failure
@@ -215,14 +215,14 @@ def test_failures_md_and_classifier_tasks_scored_by_judge_py(tmp_path, capsys):
     rows = [json.loads(l) for l in (tmp_path / "failures.jsonl").read_text().splitlines()]
     assert [r["trajectory_id"] for r in rows] == ["1|m|0|c2", "2|m|1|c1"] and "scattergun" in rows[0]["categories"]
     assert "<JUDGE_REASON>" in rows[0]["prompt"] and rows[0]["variant"] == "m"
-    # a fake classifier run through run.py, then judge.py score against hand labels
+    # a fake classifier run through run.py, then classifier.py score against hand labels
     cls = tmp_path / "cls_raw.jsonl"
     _write(cls, [{"provider": "openai", "model": "x", "task_id": r["id"],
                   "metadata": {k: r[k] for k in ("task", "variant", "trajectory_id", "categories")},
                   "response": json.dumps({"category": "missing" if r["id"].startswith("1") else "wrong_value", "why": "w"})}
                  for r in rows])
     (tmp_path / "labels.csv").write_text("trajectory_id,category\n1|m|0|c2,missing\n2|m|1|c1,format\n")
-    judge.score(cls, tmp_path / "labels.csv")
+    classifier.score(cls, tmp_path / "labels.csv")
     text = capsys.readouterr().out
     assert "agreement with labels: 1/2" in text and "missing" in text
 

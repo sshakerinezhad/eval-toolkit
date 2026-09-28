@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-import judge
+import classifier
 
 
 # ---------- helpers ----------
@@ -54,7 +54,7 @@ def _prompt(tmp_path):
 
 def _build(tmp_path, *extra):
     d, out = _layout(tmp_path), tmp_path / "judge_tasks.jsonl"
-    assert judge.main(["build", str(d), "--prompt", str(_prompt(tmp_path)), "--out", str(out), *extra]) == 0
+    assert classifier.main(["build", str(d), "--prompt", str(_prompt(tmp_path)), "--out", str(out), *extra]) == 0
     return [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
 
 
@@ -90,14 +90,14 @@ def test_build_rows_load_in_run_py(tmp_path):
 def test_duplicate_folder_dies(tmp_path):
     d = _layout(tmp_path)
     with pytest.raises(SystemExit, match="duplicate trajectory"):
-        judge.build([d, d], _prompt(tmp_path), tmp_path / "out.jsonl")
+        classifier.build([d, d], _prompt(tmp_path), tmp_path / "out.jsonl")
 
 
 def test_prompt_without_categories_dies(tmp_path):
     p = tmp_path / "bad.md"
     p.write_text("no categories here", encoding="utf-8")
     with pytest.raises(SystemExit, match="no category lines"):
-        judge.build([_layout(tmp_path)], p, tmp_path / "out.jsonl")
+        classifier.build([_layout(tmp_path)], p, tmp_path / "out.jsonl")
 
 
 def test_crash_without_score_counts_as_fail(tmp_path):
@@ -109,7 +109,7 @@ def test_crash_without_score_counts_as_fail(tmp_path):
     index = json.loads((d / "trajectories_index.json").read_text(encoding="utf-8"))
     index[0]["final_score"] = None
     (d / "trajectories_index.json").write_text(json.dumps(index), encoding="utf-8")
-    judge.build([d], _prompt(tmp_path), tmp_path / "out.jsonl")
+    classifier.build([d], _prompt(tmp_path), tmp_path / "out.jsonl")
     ids = [json.loads(line)["id"] for line in (tmp_path / "out.jsonl").read_text(encoding="utf-8").splitlines()]
     assert ids == ["traj_pass", "traj_fail"]
 
@@ -122,13 +122,13 @@ def _record(n_turns=10, size=100):
 
 
 def test_excerpt_last_n_turns():
-    e = judge.excerpt(_record(), 3, 60000)
+    e = classifier.excerpt(_record(), 3, 60000)
     assert "### [8]" in e and "### [10]" in e and "### [7]" not in e
     assert "Last 3 of 10 turns" in e and "cut" not in e
 
 
 def test_excerpt_cap_keeps_task_tests_and_newest():
-    e = judge.excerpt(_record(), 10, 500)
+    e = classifier.excerpt(_record(), 10, 500)
     assert len(e) <= 500
     assert "THE TASK" in e and "FAIL test_b" in e and "### [10]" in e and "### [1]" not in e
     assert "earlier turn(s) cut" in e
@@ -137,13 +137,13 @@ def test_excerpt_cap_keeps_task_tests_and_newest():
 def test_excerpt_huge_newest_turn_keeps_its_tail():
     rec = _record(n_turns=1, size=5000)
     rec["turns"][0]["content"] += "THE_END"
-    e = judge.excerpt(rec, 30, 1000)
+    e = classifier.excerpt(rec, 30, 1000)
     assert len(e) <= 1000 and "THE_END" in e and "FAIL test_b" in e
 
 
 @pytest.mark.parametrize("cap", [1, 20, 60])
 def test_excerpt_tiny_cap_never_exceeded(cap):
-    assert len(judge.excerpt(_record(), 30, cap)) <= cap
+    assert len(classifier.excerpt(_record(), 30, cap)) <= cap
 
 
 # ---------- parse_response ----------
@@ -157,7 +157,7 @@ def test_excerpt_tiny_cap_never_exceeded(cap):
     (None, ("unparsed", "(no reply)")),
 ])
 def test_parse_response(text, want):
-    assert judge.parse_response(text, CATS) == want
+    assert classifier.parse_response(text, CATS) == want
 
 
 # ---------- score ----------
@@ -183,7 +183,7 @@ def _score_fixture(tmp_path):
 
 def test_score_counts_and_agreement(tmp_path):
     raw, labels = _score_fixture(tmp_path)
-    assert judge.main(["score", str(raw), "--labels", str(labels)]) == 0
+    assert classifier.main(["score", str(raw), "--labels", str(labels)]) == 0
     doc = json.loads((tmp_path / "scores.json").read_text(encoding="utf-8"))
     m = doc["models"]["anthropic:judge-1"]
     a, b = m["variants"]["A"], m["variants"]["B"]
@@ -198,7 +198,7 @@ def test_score_counts_and_agreement(tmp_path):
 
 def test_score_without_labels(tmp_path):
     raw, _ = _score_fixture(tmp_path)
-    doc = judge.score(raw)
+    doc = classifier.score(raw)
     assert doc["models"]["anthropic:judge-1"]["agreement"] is None
 
 
@@ -206,19 +206,19 @@ def test_score_unknown_label_dies(tmp_path):
     raw, labels = _score_fixture(tmp_path)
     labels.write_text("trajectory_id,category\nt1,bugg\n", encoding="utf-8")
     with pytest.raises(SystemExit, match="unknown category"):
-        judge.score(raw, labels)
+        classifier.score(raw, labels)
 
 
 def test_score_duplicate_reply_dies(tmp_path):
     raw, _ = _score_fixture(tmp_path)
     raw.write_text(raw.read_text(encoding="utf-8") + json.dumps(_raw_row("t1", "A", "{}")) + "\n", encoding="utf-8")
     with pytest.raises(SystemExit, match="twice"):
-        judge.score(raw)
+        classifier.score(raw)
 
 def test_load_prompt_strips_provenance_header(tmp_path):
     p = tmp_path / "x.md"
     p.write_text("<!-- source: mine, 2026-09-25 -->\nThe prompt.", encoding="utf-8")
-    assert judge.load_prompt(p) == "The prompt."
+    assert classifier.load_prompt(p) == "The prompt."
     p.write_text("<!-- source: mine -->\n", encoding="utf-8")
     with pytest.raises(SystemExit, match="empty"):
-        judge.load_prompt(p)
+        classifier.load_prompt(p)

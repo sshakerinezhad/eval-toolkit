@@ -1,7 +1,7 @@
-"""JUDGE. Turn agent traces into LLM-judge tasks for run.py, then score the judge's replies.
+"""CLASSIFIER. Turn agent traces (or rubric failures from grade.py failures) into LLM classification tasks for run.py, then count the categories and check them against hand labels.
 
-    python judge.py build DIR [DIR ...] --prompt FILE --out FILE [--select all|passes|fails] [--turns 30] [--max-chars 60000]
-    python judge.py score RAW [--labels labels.csv]
+    python classifier.py build DIR [DIR ...] --prompt FILE --out FILE [--select all|passes|fails] [--turns 30] [--max-chars 60000]
+    python classifier.py score RAW [--labels labels.csv]
 
 build: prompt file -> category names -> for each trace folder, iter_trajectories() -> keep the selected
 ones -> excerpt (task, last N turns, test output; hard-capped) -> one task row per trajectory:
@@ -256,7 +256,7 @@ def score(raw: str | Path, labels: str | Path | None = None) -> dict:
             die(f"{raw}:{n}: invalid JSON: {e}")
         meta = row.get("metadata") or {}
         if any(k not in meta for k in ("trajectory_id", "variant", "categories")):
-            die(f"{raw}:{n}: metadata lacks trajectory_id/variant/categories; tasks not made by judge.py build?")
+            die(f"{raw}:{n}: metadata lacks trajectory_id/variant/categories; tasks not made by classifier.py build?")
         if cats is None:
             cats = meta["categories"]
         elif meta["categories"] != cats:

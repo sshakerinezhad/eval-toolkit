@@ -7,7 +7,7 @@
 means:    one bar per model, the metric's value with its bootstrap interval; n in the title.
 paired:   two models: per-task difference (B minus A, mean over samples), sorted, zero line, the mean
           difference with its interval as a band when metrics.json is beside it; up/down/same in the title.
-taxonomy: judge.py's scores.json: counts per category, one bar group per variant.
+taxonomy: classifier.py's scores.json: counts per category, one bar group per variant.
 Plain style: no grid, no colour beyond one per series, every number in the title or on the bar.
 Beside every PNG, the same name with .json: the exact series drawn (labels, values, intervals, counts),
 so the deck can draw the chart natively (Claude Design) from the numbers; the PNG is the fallback.
@@ -117,7 +117,7 @@ def taxonomy(scores_path: str | Path, out: Path | None = None) -> Path:
     doc = _load(scores_path)
     models = doc.get("models") or {}
     if not models:
-        die("scores.json has no models (made by judge.py score?)")
+        die("scores.json has no models (made by classifier.py score?)")
     model, block = next(iter(models.items()))
     cats = doc["categories"]
     variants = list(block["variants"])
@@ -145,7 +145,7 @@ def taxonomy(scores_path: str | Path, out: Path | None = None) -> Path:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--kind", required=True, choices=["means", "paired", "taxonomy"])
-    ap.add_argument("file", help="metrics.json (means), scores.jsonl (paired) or judge.py scores.json (taxonomy)")
+    ap.add_argument("file", help="metrics.json (means), scores.jsonl (paired) or classifier.py scores.json (taxonomy)")
     ap.add_argument("--metric", default="mean", help="means: which metric (mean, pass@k, pass^k)")
     ap.add_argument("--metrics", help="paired: metrics.json for the CI band (default: beside the scores file)")
     ap.add_argument("--out")
