@@ -1,9 +1,10 @@
 """GRADE. Score APEX-v1 runner answers against each task's rubric criteria with an LLM judge.
 
     python grade.py build [--runs RAW] [--data CSV] [--prompt FILE] [--out FILE] [--gold JSON]
-    python grade.py score RAW [--tasks FILE] [--baseline MODEL] [--labels CSV]
+    python grade.py score RAW [--tasks FILE] [--baseline MODEL] [--labels judge_labels.csv]
     python grade.py label TASKS [--n 40] [--out CSV] [--seed 0]
     python grade.py agree RAW_A RAW_B
+    python grade.py failures RAW [--out DIR] [--prompt FILE] [--excerpt 600] [--label [--n 20] [--seed 0]]
 
 build: runner raw.jsonl (last line per task+model+sample wins) + train.csv rubrics -> one run.py task
 per (task, model, sample, criterion). With n_samples 3 every sample is graded, not just the last. User message = judge prompt (Mercor's APEX grader prompt, scattergun guard
@@ -25,13 +26,23 @@ If gold does not score near 1.0, fix the judge or the rubric before trusting any
 
 label: pick n judge calls at random from TASKS (the build output, so it works before or while the judge
 runs; the judge's raw.jsonl is accepted too), show each one (task, model, sample, criterion text, response
-excerpt), take y / n from the keyboard (q stops and keeps what was done), append to labels.csv. Rerunning
+excerpt), take y / n from the keyboard (q stops and keeps what was done), append to judge_labels.csv. Rerunning
 skips ids already labelled. The judge's verdict is never shown.
 
 score --labels: judge vs your labels on the ids you labelled: accuracy, precision and recall on Met,
 Cohen's kappa, n, base rate, the disagreements. Precision on Met = of what the judge called Met, how
 many you did. Recall = of what you called Met, how many the judge caught. Kappa = agreement beyond
 chance: a judge that says Met on everything in a 90% Met set agrees 90% and has kappa 0.
+
+failures: every criterion the judge marked not met (judge errors stay in their bucket) -> failures.md for
+hand reading (task, model, sample, criterion text, the judge's reason, a response excerpt) and, when
+--prompt names a classifier prompt with '- name: description' category lines (prompts/classify_criteria.md),
+failures.jsonl: one run.py task per failure in judge.py's row shape, so `python judge.py score RAW
+--labels failure_labels.csv` gives the count table and "agrees with me on x of n" (failure_labels.csv: trajectory_id,
+category; trajectory_id is the failure id printed in failures.md). --label opens a terminal loop on a random
+n of the failures: criterion, judge reason, response excerpt, the numbered category list; type the number
+(or q to stop, keeping what was done); appends to failure_labels.csv next to RAW, rerun skips ids already done.
+Under 40 failures: hand-label all, skip the classifier.
 
 agree: two judge runs over the same judge tasks (e.g. two judge models, or the same one twice):
 raw agreement, kappa, n, disagreements. Unparseable verdicts are left out and counted.
@@ -48,7 +59,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import metrics
-from judge import FENCE, load_prompt
+from judge import FENCE, categories, load_prompt
 
 NO_RESPONSE = "(the model returned no response)"
 
@@ -325,7 +336,7 @@ def call_fields(row: dict) -> tuple[str, dict]:
 
 def label(tasks: str | Path, n: int, out: str | Path, seed: int = 0, ask=input, say=print,
           excerpt: int = 1200) -> int:
-    """Terminal loop: show n random judge calls, verdict hidden, take y/n, append to OUT. Returns count."""
+    """Terminal loop: show n random judge calls, verdict hidden, take y/n, append to OUT (judge_labels.csv). Returns count."""
     tasks, out = Path(tasks), Path(out)
     if not tasks.exists():
         die(f"not found: {tasks}")
@@ -436,6 +447,86 @@ def agree(raw_a: str | Path, raw_b: str | Path) -> int:
     return 0
 
 
+# ---------- failures ----------
+
+def failures(raw: str | Path, out: str | Path | None = None, prompt: str | Path | None = None,
+             excerpt: int = 600, label_n: int | None = None, seed: int = 0, ask=input, say=print) -> int:
+    """Not-met criteria -> failures.md (+ failures.jsonl classifier tasks when a prompt is given;
+    + a hand-labelling loop over label_n random failures when label_n is set). Returns the failure count."""
+    raw = Path(raw)
+    out = Path(out) if out else raw.parent
+    out.mkdir(parents=True, exist_ok=True)
+    fails = []
+    for row in judge_rows(raw):
+        v, why = parse_verdict(row.get("response"))
+        if v is False:
+            response, criterion = blocks(row.get("prompt") or "")
+            m = row["metadata"]
+            fails.append({"id": row["task_id"], "task": m["task_id"], "variant": m["model"],
+                          "sample": m.get("sample_index", 0), "criterion_id": m["criterion_id"],
+                          "criterion": criterion, "reason": why, "response": response})
+    fails.sort(key=lambda f: (str(f["task"]), f["variant"], f["sample"], f["criterion_id"]))
+    md = [f"# Failures: {len(fails)} criteria not met  (source {raw})\n",
+          "Read them. Label about 20 with --label (writes failure_labels.csv: trajectory_id,category), or by hand using the id line of each; "
+          "under 40, label them all and skip the classifier.\n"]
+    for f in fails:
+        md.append(f"## {f['id']}\ntask {f['task']} · model {f['variant']} · sample {f['sample']} · criterion {f['criterion_id']}\n\n"
+                  f"**Criterion:** {f['criterion']}\n\n**Judge:** {f['reason'] or '(no reason given)'}\n\n"
+                  f"**Response (first {excerpt} chars):**\n\n```\n{f['response'][:excerpt]}\n```\n")
+    (out / "failures.md").write_text("\n".join(md), encoding="utf-8")
+    print(f"{len(fails)} failure(s) -> {out / 'failures.md'}" + ("  (under 40: hand-label all, no classifier)" if len(fails) < 40 else ""))
+    if prompt:
+        text = load_prompt(prompt)
+        cats = categories(text)
+        if not cats:
+            die(f"{prompt}: no category lines ('- name: description') found")
+        rows = [{"id": f["id"], "task": f["task"], "variant": f["variant"], "trajectory_id": f["id"], "categories": cats,
+                 "prompt": (f"{text}\n\n<CRITERION>\n{f['criterion']}\n</CRITERION>\n\n<JUDGE_REASON>\n{f['reason']}\n</JUDGE_REASON>\n\n"
+                            f"<RESPONSE>\n{f['response']}\n</RESPONSE>")} for f in fails]
+        (out / "failures.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        print(f"{len(rows)} classifier task(s) with categories {cats} -> {out / 'failures.jsonl'}; "
+              f"run them with run.py, then `python judge.py score <raw> --labels failure_labels.csv`")
+        if label_n:
+            label_failures(fails, cats, out / "failure_labels.csv", label_n, seed, excerpt, ask, say)
+    elif label_n:
+        die("--label needs --prompt: the categories come from the prompt's '- name: description' lines")
+    return len(fails)
+
+
+def label_failures(fails: list[dict], cats: list[str], out: Path, n: int, seed: int, excerpt: int,
+                   ask=input, say=print) -> int:
+    """Terminal loop: n random failures, type the category number (q stops), append to failure_labels.csv. Returns count."""
+    done = set()
+    if out.exists() and out.stat().st_size > 0:
+        with open(out, encoding="utf-8-sig", newline="") as f:
+            done = {r["trajectory_id"] for r in csv.DictReader(f)}
+    left = [f for f in fails if f["id"] not in done]
+    if not left:
+        say(f"nothing left to label ({len(done)} already in {out})")
+        return 0
+    pick = random.Random(seed).sample(left, min(n, len(left)))
+    menu = "\n".join(f"  {i}. {c}" for i, c in enumerate(cats, 1))
+    count = 0
+    with open(out, "a", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        if not done:
+            w.writerow(["trajectory_id", "category"])
+        for k, fl in enumerate(pick, 1):
+            say(f"\n[{k}/{len(pick)}]  {fl['id']}\nCRITERION: {fl['criterion']}\nJUDGE: {fl['reason'] or '(no reason)'}\n"
+                f"RESPONSE (first {excerpt} chars):\n{fl['response'][:excerpt]}\n\nCategories:\n{menu}")
+            while True:
+                a = ask("category number, or q: ").strip().lower()
+                if a == "q" or a in cats or (a.isdigit() and 1 <= int(a) <= len(cats)):
+                    break
+            if a == "q":
+                break
+            w.writerow([fl["id"], cats[int(a) - 1] if a.isdigit() else a])
+            f.flush()
+            count += 1
+    say(f"labelled {count} this time, {len(done) + count} total in {out}")
+    return count
+
+
 # ---------- CLI ----------
 
 def main(argv: list[str] | None = None) -> int:
@@ -451,12 +542,20 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("raw")
     s.add_argument("--tasks", default="results/grade_v1/tasks.jsonl", help="build output, checks completeness")
     s.add_argument("--baseline", default="gpt-5.6-luna", help="diff = other model minus this one")
-    s.add_argument("--labels", help="labels.csv from `label`; prints judge-vs-you agreement")
-    l = sub.add_parser("label", help="label n random judge calls by hand from build's tasks.jsonl -> labels.csv")
+    s.add_argument("--labels", help="judge_labels.csv from `label`; prints judge-vs-you agreement")
+    l = sub.add_parser("label", help="label n random judge calls by hand from build's tasks.jsonl -> judge_labels.csv")
     l.add_argument("tasks", help="grade.py build output (works before the judge runs); judge raw.jsonl also accepted")
     l.add_argument("--n", type=int, default=40)
-    l.add_argument("--out", help="default: labels.csv next to RAW")
+    l.add_argument("--out", help="default: judge_labels.csv next to TASKS")
     l.add_argument("--seed", type=int, default=0)
+    f = sub.add_parser("failures", help="not-met criteria -> failures.md to read, failures.jsonl for a classifier")
+    f.add_argument("raw")
+    f.add_argument("--out", help="folder; default: next to RAW")
+    f.add_argument("--prompt", help="classifier prompt with category lines, e.g. prompts/classify_criteria.md")
+    f.add_argument("--excerpt", type=int, default=600)
+    f.add_argument("--label", action="store_true", help="then hand-label --n random failures in the terminal -> failure_labels.csv")
+    f.add_argument("--n", type=int, default=20)
+    f.add_argument("--seed", type=int, default=0)
     g = sub.add_parser("agree", help="two judge runs on the same tasks -> agreement, kappa, disagreements")
     g.add_argument("raw_a")
     g.add_argument("raw_b")
@@ -465,10 +564,13 @@ def main(argv: list[str] | None = None) -> int:
         build(args.runs, args.data, args.prompt, args.out, args.gold)
         return 0
     if args.cmd == "label":
-        label(args.tasks, args.n, args.out or Path(args.tasks).parent / "labels.csv", args.seed)
+        label(args.tasks, args.n, args.out or Path(args.tasks).parent / "judge_labels.csv", args.seed)
         return 0
     if args.cmd == "agree":
         return agree(args.raw_a, args.raw_b)
+    if args.cmd == "failures":
+        failures(args.raw, args.out, args.prompt, args.excerpt, args.n if args.label else None, args.seed)
+        return 0
     return score(args.raw, args.tasks, args.baseline, args.labels)
 
 
