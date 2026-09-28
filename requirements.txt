@@ -5,3 +5,6 @@ pyyaml
 tqdm
 pytest
 pytest-asyncio
+pypdf
+openpyxl
+python-docx

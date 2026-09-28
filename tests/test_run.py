@@ -165,7 +165,8 @@ def test_load_apex_csv_prompt_then_docs_in_order(tmp_path):
     assert t["prompt"] == ("Use b data.csv.\n\n==== Attached files content: ====\n\n"
                            "=== b data.csv ===\nx,y\n1,2\n\n=== a.csv ===\nk\n9")
     assert t["metadata"] == {"domain": "Finance", "prompt_raw": "Use b data.csv.",
-                             "attachments": ["documents/7/b data.csv", "documents/7/a.csv"]}
+                             "attachments": ["documents/7/b data.csv", "documents/7/a.csv"],
+                             "attachment_chars": {"b data.csv": 7, "a.csv": 3}}
 
 
 def test_load_apex_csv_missing_attachment_dies_naming_task_and_file(tmp_path):

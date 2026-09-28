@@ -24,6 +24,7 @@ from typing import NoReturn
 import yaml
 from tqdm import tqdm
 
+import attachments
 import llm
 
 RESULTS_DIR = Path("results")
@@ -101,11 +102,11 @@ def load_config(path: str | Path, overrides: dict) -> RunConfig:
     return cfg
 
 
-def load_tasks(path: str | Path, task_ids: list | None = None) -> list[dict]:
+def load_tasks(path: str | Path, task_ids: list | None = None, max_chars: int = attachments.MAX_CHARS) -> list[dict]:
     """Pick loader by extension, then keep only `task_ids` (unknown id -> die)."""
     path = Path(path)
     if path.suffix == ".csv":
-        return _load_apex_csv(path, task_ids)
+        return _load_apex_csv(path, task_ids, max_chars)
     return _select(_load_jsonl(path), task_ids, lambda t: t["id"], path)
 
 
@@ -121,11 +122,7 @@ def _select(items: list, task_ids: list | None, get_id, path: Path) -> list:
     return [x for x in items if json.dumps(get_id(x)) in want]
 
 
-# APEX attachments are inlined as text; anything else (pdf/docx/xlsx) needs native file parts, not built yet.
-TEXT_ATTACHMENTS = {".csv", ".txt", ".md", ".json"}
-
-
-def _load_apex_csv(path: Path, task_ids: list | None) -> list[dict]:
+def _load_apex_csv(path: Path, task_ids: list | None, max_chars: int = attachments.MAX_CHARS) -> list[dict]:
     """APEX-v1 train.csv -> tasks. Rubric JSON is deliberately never loaded (grading is separate).
 
     Prompt layout mirrors Mercor's harness: task prompt, then each attached file's text under its bare
@@ -147,19 +144,20 @@ def _load_apex_csv(path: Path, task_ids: list | None) -> list[dict]:
         tid = int(row["Task ID"])
         rels = [p.strip() for p in row["File Attachments"].splitlines() if p.strip()]
         parts = [row["Prompt"]]
+        chars = {}
         if rels:
             parts.append("==== Attached files content: ====")
         for rel in rels:
             f = path.parent / rel
-            if f.suffix.lower() not in TEXT_ATTACHMENTS:
-                die(f"task {tid}: attachment {rel} is {f.suffix or 'no extension'}; only text types "
-                    f"{sorted(TEXT_ATTACHMENTS)} are supported")
-            if not f.is_file():
-                die(f"task {tid}: attachment not found: {f}")
-            # utf-8-sig drops the BOM some APEX CSVs carry; read_text normalises CRLF -> LF
-            parts.append(f"=== {f.name} ===\n{f.read_text(encoding='utf-8-sig').rstrip()}")
+            try:
+                text = attachments.read_attachment(f, max_chars)  # text as is; pdf/xlsx/docx converted; else die
+            except SystemExit as e:
+                die(f"task {tid}: {str(e).removeprefix('ERROR: ')}")
+            chars[f.name] = len(text)
+            parts.append(f"=== {f.name} ===\n{text}")
         tasks.append({"id": tid, "prompt": "\n\n".join(parts),
-                      "metadata": {"domain": row["Domain"], "prompt_raw": row["Prompt"], "attachments": rels}})
+                      "metadata": {"domain": row["Domain"], "prompt_raw": row["Prompt"], "attachments": rels,
+                                   "attachment_chars": chars}})
     if not tasks:
         die(f"{path}: no tasks")
     return tasks
@@ -263,6 +261,7 @@ def print_dashboard(cfg: RunConfig, name: str, jobs: list[Job], est: dict) -> No
     print(f"RUN {name}  ->  {(RESULTS_DIR / name / 'raw.jsonl').as_posix()}")
     print("-" * w)
     print(f"tasks file   : {cfg.tasks}  ({n_tasks} tasks)")
+    print(attachments.report([j.task for j in jobs if j.sample_index == 0]))
     print(f"models       : {', '.join(cfg.models)}")
     print(f"n_samples    : {cfg.n_samples}    workers/model: {cfg.workers}    "
           f"max_retries: {cfg.max_retries}    timeout: {cfg.timeout}s")
@@ -449,11 +448,13 @@ def _main(argv: list[str] | None) -> int:
     ap.add_argument("--yes", action="store_true", help="skip confirmation; abort instead of prompting")
     ap.add_argument("--max-retries", type=int, default=None)
     ap.add_argument("--timeout", type=float, default=None)
+    ap.add_argument("--max-attachment-chars", type=int, default=attachments.MAX_CHARS,
+                    help=f"stop if one attachment converts to more text than this (default {attachments.MAX_CHARS:,})")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config, {"max_retries": args.max_retries, "timeout": args.timeout})
     args.name = resolve_run_name(args.name, args.yes)  # before smoke: a name clash must not cost a call
-    tasks = load_tasks(cfg.tasks, cfg.task_ids)
+    tasks = load_tasks(cfg.tasks, cfg.task_ids, args.max_attachment_chars)
     jobs = build_jobs(cfg, tasks)
     pricing = load_pricing()
 
