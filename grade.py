@@ -3,15 +3,16 @@
     python grade.py build [--runs RAW] [--data CSV] [--prompt FILE] [--out FILE]
     python grade.py score RAW [--tasks FILE] [--baseline MODEL]
 
-build: runner raw.jsonl (last line per task+model wins) + train.csv rubrics -> one run.py task per
-(task, model, criterion). User message = judge prompt (Mercor's APEX grader prompt, scattergun guard
+build: runner raw.jsonl (last line per task+model+sample wins) + train.csv rubrics -> one run.py task
+per (task, model, sample, criterion). With n_samples 3 every sample is graded, not just the last. User message = judge prompt (Mercor's APEX grader prompt, scattergun guard
 included; run.py configs can't load a system prompt from a file) + <TASK_PROMPT> (raw prompt, no
 attachments: criteria state their expected values) + <RESPONSE> + <CRITERION>. No LLM calls here.
 
 score: judge raw.jsonl from run.py -> parse {"rationale", "is_criteria_true"} per criterion
-(unparseable = fail, counted as a judge error) -> score = passed/total per (task, model), unweighted
-like Mercor's scoring -> scores.jsonl (task, variant, score) next to RAW -> metrics.py: mean with
-bootstrap CI per model, paired diff (other model minus --baseline) with up/down/same.
+(unparseable = fail, counted as a judge error) -> score = passed/total per (task, model, sample),
+unweighted like Mercor's scoring -> scores.jsonl (task, variant, sample, score) next to RAW, one row per
+sample -> metrics.py: mean over samples and tasks with bootstrap CI per model, pass@k / pass^k when
+there are several samples, paired diff (other model minus --baseline) with up/down/same.
 """
 from __future__ import annotations
 
@@ -35,8 +36,8 @@ def die(msg: str) -> NoReturn:
 
 # ---------- load ----------
 
-def load_answers(path: str | Path) -> dict[tuple[int, str], dict]:
-    """Runner raw.jsonl -> {(task_id, model): line}. Later lines win (appended reruns)."""
+def load_answers(path: str | Path) -> dict[tuple[int, str, int], dict]:
+    """Runner raw.jsonl -> {(task_id, model, sample_index): line}. Later lines win (appended reruns)."""
     path = Path(path)
     if not path.exists():
         die(f"runs not found: {path}")
@@ -48,14 +49,15 @@ def load_answers(path: str | Path) -> dict[tuple[int, str], dict]:
             row = json.loads(line)
         except json.JSONDecodeError as e:
             die(f"{path}:{n}: invalid JSON: {e}")
-        answers[(row["task_id"], row["model"])] = row
+        answers[(row["task_id"], row["model"], row.get("sample_index", 0))] = row
     if not answers:
         die(f"{path}: no rows")
-    models = sorted({m for _, m in answers})
-    tasks = sorted({t for t, _ in answers})
-    missing = [(t, m) for t in tasks for m in models if (t, m) not in answers]
+    models = sorted({m for _, m, _ in answers})
+    tasks = sorted({t for t, _, _ in answers})
+    samples = sorted({i for _, _, i in answers})
+    missing = [(t, m, i) for t in tasks for m in models for i in samples if (t, m, i) not in answers]
     if missing:
-        die(f"{len(missing)} (task, model) pair(s) have no answer, e.g. {missing[:5]}")
+        die(f"{len(missing)} (task, model, sample) triple(s) have no answer, e.g. {missing[:5]}")
     return answers
 
 
@@ -83,19 +85,22 @@ def build(runs: str | Path, data: str | Path, prompt: str | Path, out: str | Pat
     rubrics = load_rubrics(data)
     judge_prompt = load_prompt(prompt)
     rows = []
-    for (task_id, model), a in sorted(answers.items()):
+    for (task_id, model, sample), a in sorted(answers.items()):
         if task_id not in rubrics:
             die(f"task {task_id} has no rubric in {data}")
         for c in rubrics[task_id]:
-            rows.append({"id": f"{task_id}|{model}|{c['id']}",
+            rows.append({"id": f"{task_id}|{model}|{sample}|{c['id']}",
                          "prompt": judge_message(judge_prompt, a["metadata"]["prompt_raw"], a["response"],
                                                  c["description"]),
-                         "task_id": task_id, "model": model, "criterion_id": c["id"]})
+                         "task_id": task_id, "model": model, "sample_index": sample, "criterion_id": c["id"]})
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
-    n_tasks, n_models = len({t for t, _ in answers}), len({m for _, m in answers})
-    print(f"wrote {len(rows)} judge task(s) ({n_tasks} tasks x {n_models} models x criteria) -> {out}")
+    n_tasks = len({t for t, _, _ in answers})
+    n_models = len({m for _, m, _ in answers})
+    n_samples = len({i for _, _, i in answers})
+    print(f"wrote {len(rows)} judge task(s) ({n_tasks} tasks x {n_models} models x {n_samples} samples "
+          f"x criteria) -> {out}")
     return len(rows)
 
 
@@ -129,7 +134,7 @@ def score(raw: str | Path, tasks: str | Path, baseline: str) -> int:
             die(f"not found: {p}")
     expected = {json.loads(l)["id"] for l in tasks.read_text(encoding="utf-8").splitlines() if l.strip()}
     passed: dict[str, bool] = {}    # judge task id -> criterion met
-    cell: dict[str, tuple] = {}     # judge task id -> (task_id, model)
+    cell: dict[str, tuple] = {}     # judge task id -> (task_id, model, sample_index)
     errors = []
     for n, line in enumerate(raw.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
@@ -142,7 +147,7 @@ def score(raw: str | Path, tasks: str | Path, baseline: str) -> int:
         if verdict is None:
             errors.append((row["task_id"], why))
         passed[row["task_id"]] = bool(verdict)
-        cell[row["task_id"]] = (meta["task_id"], meta["model"])
+        cell[row["task_id"]] = (meta["task_id"], meta["model"], meta.get("sample_index", 0))
     missing = expected - set(passed)
     if missing:
         die(f"{len(missing)} judge task(s) in {tasks} have no row in {raw}, e.g. {sorted(missing)[:3]}; "
@@ -152,14 +157,21 @@ def score(raw: str | Path, tasks: str | Path, baseline: str) -> int:
     for jid, ok in passed.items():
         per.setdefault(cell[jid], []).append(ok)
     out = raw.parent / "scores.jsonl"
-    out.write_text("".join(json.dumps({"task": t, "variant": m, "score": sum(v) / len(v)}) + "\n"
-                           for (t, m), v in sorted(per.items())), encoding="utf-8")
+    out.write_text("".join(json.dumps({"task": t, "variant": m, "sample": i, "score": sum(v) / len(v)}) + "\n"
+                           for (t, m, i), v in sorted(per.items())), encoding="utf-8")
 
-    models = sorted({m for _, m in per})
+    models = sorted({m for _, m, _ in per})
     for m in models:
-        mine = [sum(v) / len(v) for (_, mm), v in per.items() if mm == m]
-        print(f"{m:24s} tasks {len(mine)}  mean score {sum(mine) / len(mine):.3f}  "
-              f"all criteria met {sum(s == 1.0 for s in mine)}")
+        by_task: dict[int, list[float]] = {}  # task -> score of each sample
+        for (t, mm, _), v in per.items():
+            if mm == m:
+                by_task.setdefault(t, []).append(sum(v) / len(v))
+        task_means = [sum(x) / len(x) for x in by_task.values()]
+        spread = [max(x) - min(x) for x in by_task.values()]  # per-task gap between best and worst sample
+        n_samples = max(len(x) for x in by_task.values())
+        print(f"{m:24s} tasks {len(by_task)}  samples/task {n_samples}  mean score {sum(task_means) / len(task_means):.3f}  "
+              f"all criteria met {sum(s == 1.0 for s in task_means)}  "
+              f"mean spread over samples {sum(spread) / len(spread):.3f}")
     print(f"judge_errors (unparseable, counted as fail): {len(errors)}")
     for jid, why in errors[:10]:
         print(f"  {jid}: {' '.join(why.split())[:120]}")
