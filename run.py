@@ -55,6 +55,7 @@ class RunConfig:
     max_retries: int = 4
     timeout: float = 60    # seconds per call
     task_ids: list | None = None  # run only these ids (in file order); None = all
+    system_prompt_file: str | None = None  # read into system_prompt (provenance header stripped); a prompt in the system role
 
 
 def load_config(path: str | Path, overrides: dict) -> RunConfig:
@@ -69,6 +70,14 @@ def load_config(path: str | Path, overrides: dict) -> RunConfig:
     if unknown:
         die(f"unknown config keys {sorted(unknown)}; known: {sorted(known)}")
     raw.update({k: v for k, v in overrides.items() if v is not None})
+    if raw.get("system_prompt_file"):
+        f = Path(raw["system_prompt_file"])
+        if not f.exists():
+            die(f"system_prompt_file not found: {f}")
+        text = f.read_text(encoding="utf-8-sig").strip()
+        if text.startswith("<!--"):  # provenance header line, never sent to the model
+            text = text.split("-->", 1)[1].strip()
+        raw["system_prompt"] = text
     missing = [k for k in ("tasks", "models", "system_prompt", "max_tokens") if k not in raw]
     if missing:
         die(f"config missing required keys {missing}")
@@ -324,6 +333,7 @@ class Summary:
     tokens_in: int = 0
     tokens_out: int = 0
     wall_s: float = 0.0
+    tokens_by_model: dict = field(default_factory=dict)  # "provider:model" -> [in, out] on new (uncached) calls
 
 
 def _line(cfg: RunConfig, job: Job, *, cached: bool, response, finish_reason, tokens_in, tokens_out,
@@ -388,6 +398,8 @@ async def execute(cfg: RunConfig, jobs: list[Job], run_dir: Path) -> Summary:
             summary.truncated += r.finish_reason == "length"
             summary.tokens_in += r.tokens_in or 0
             summary.tokens_out += r.tokens_out or 0
+            t_in, t_out = summary.tokens_by_model.setdefault(f"{job.provider}:{job.model}", [0, 0])
+            summary.tokens_by_model[f"{job.provider}:{job.model}"] = [t_in + (r.tokens_in or 0), t_out + (r.tokens_out or 0)]
             consecutive = 0
         else:
             summary.failed += 1
@@ -414,6 +426,23 @@ async def execute(cfg: RunConfig, jobs: list[Job], run_dir: Path) -> Summary:
     return summary
 
 
+def actual_cost(s: Summary, pricing: dict) -> str:
+    """Dollars actually spent on this run's new calls: tokens by model times pricing.json. Cached calls cost 0."""
+    total, unknown, parts = 0.0, [], []
+    for spec, (t_in, t_out) in s.tokens_by_model.items():
+        price = pricing.get(spec)
+        if not price:
+            unknown.append(spec)
+            continue
+        c = t_in / 1e6 * price["input_per_m"] + t_out / 1e6 * price["output_per_m"]
+        total += c
+        parts.append(f"{spec} ${c:.4f}")
+    line = f"${total:.4f} actual on new calls" + (f" ({', '.join(parts)})" if len(parts) > 1 else "")
+    if unknown:
+        line += f"; no price in pricing.json for {', '.join(unknown)}"
+    return line
+
+
 def print_summary(s: Summary, pricing: dict, cfg: RunConfig) -> None:
     print("-" * 78)
     if s.killed:
@@ -425,6 +454,7 @@ def print_summary(s: Summary, pricing: dict, cfg: RunConfig) -> None:
         print(f"WARNING: {s.truncated} ok response(s) hit max_tokens (finish_reason=length); "
               f"raise max_tokens if that matters")
     print(f"tokens: in {s.tokens_in} / out {s.tokens_out}    wall: {_fmt_time(s.wall_s)}")
+    print(f"cost: {actual_cost(s, pricing)}")
     if s.error_counts:
         print("errors by type/status:")
         for k, v in s.error_counts.most_common():

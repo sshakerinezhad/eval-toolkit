@@ -6,7 +6,7 @@ The data is at: [PATH]. The brief says: [ONE SENTENCE].
 1. Read three rows. Tell me in plain words: the fields, what each holds, its length, and anything odd (missing values, referenced files, duplicate ids). Stop and wait for my ok.
 
 2. Then write one loader so this data runs through the toolkit as it is. Three shapes:
-   - Runner tasks for run.py: one row per task, {"id", "prompt", "metadata": {...}}. Attached files go as text under the prompt, one "=== <filename> ===" block each, the way run.py's APEX loader does it. A file that is not text: stop and tell me its name and size. Do not guess its contents.
+   - Runner tasks for run.py: one row per task, {"id", "prompt", ...}; any other field (source, domain, prompt_raw) rides along as metadata. Attached files go as text under the prompt, one "=== <filename> ===" block each, the way run.py's APEX loader does it. A file that is not text: stop and tell me its name and size. Do not guess its contents.
    - Rubrics for grade.py: {task_id: [{"id", "description", "weight", "depends_on"}, ...]} in rubric order. Carry weight and dependency fields when the data has them, else null.
    - Reference answers, if the data has them: {task_id: text}.
    - Responses already given (no inference to run): one raw.jsonl line per response in run.py's shape, {"task_id", "model", "sample_index", "response", "metadata": {"prompt_raw": the task prompt}}, so grade.py build reads them as if run.py had made them.

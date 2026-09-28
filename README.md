@@ -43,6 +43,7 @@ python plot.py --kind paired results/judge/scores.jsonl
 python plot.py --kind taxonomy results/classify/scores.json
 python deliver.py results/judge                              # deliverables/, zip, email body printed
 python clock.py "minute 25 launch"                           # empty commit with the mark; git log is the timeline
+python demo.py                                               # the whole chain on toy tasks, fake model and judge, no keys
 ```
 
 A fresh repo for a new evaluation: `./new-eval.sh NAME` copies the toolkit, inits git, runs smoke and
@@ -50,7 +51,7 @@ tests, prints the clock start line.
 
 ## Shapes between steps
 
-- **Tasks in** (`run.py`): jsonl `{"id", "prompt", "metadata": {...}}`, or APEX `train.csv` (attachments inlined
+- **Tasks in** (`run.py`): jsonl `{"id", "prompt", ...}` (every other field rides along as metadata), or APEX `train.csv` (attachments inlined
   under the prompt as `=== <file> ===` blocks; pdf, xlsx, docx converted by `attachments.py`; anything else stops).
 - **raw.jsonl** (`run.py`): one line per call: `task_id, provider, model, sample_index, prompt, response,
   finish_reason, tokens_in, tokens_out, errors[], cached, metadata`. Failed calls have `response: null` and the
@@ -82,7 +83,7 @@ tests, prints the clock start line.
 - `metrics.py`: pass@1 / pass@k / pass^k, task-level bootstrap, paired diff.
 - `plot.py`: means, paired, taxonomy figures with their data.
 - `peek.py`: look at a data file before touching it. `deliver.py`: package and email body. `clock.py`: timeline
-  marks. `smoke.py`: keys and models alive.
+  marks. `smoke.py`: keys and models alive. `demo.py`: the chain end to end with fakes, in results/demo/.
 - `prompts/`: `apex_judge.md` (Mercor's APEX judge prompt, verbatim), `classify_failures.md` (trajectories),
   `classify_criteria.md` (rubric failures), `loader.md` (builder prompt for a new data shape). Every prompt
   file opens with a provenance header line that `load_prompt` strips.

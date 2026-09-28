@@ -119,6 +119,12 @@ def load_gold(path: str | Path) -> dict[int, str]:
 
 # ---------- build ----------
 
+def task_prompt_of(a: dict) -> str:
+    """The task prompt the judge sees: metadata.prompt_raw (APEX: prompt without attachments) or the prompt sent."""
+    meta = a.get("metadata") or {}
+    return meta["prompt_raw"] if isinstance(meta.get("prompt_raw"), str) else a["prompt"]
+
+
 def judge_message(judge_prompt: str, task_prompt: str, response: str | None, criterion: str) -> str:
     return (f"{judge_prompt}\n\n<TASK_PROMPT>\n{task_prompt}\n</TASK_PROMPT>\n\n"
             f"<RESPONSE>\n{NO_RESPONSE if response is None else response}\n</RESPONSE>\n\n"
@@ -135,12 +141,12 @@ def build(runs: str | Path, data: str | Path, prompt: str | Path, out: str | Pat
     judge_prompt = load_prompt(prompt)
     if gold:  # reference answers ride along as model "gold", sample 0, using each task's own prompt
         ref = load_gold(gold)
-        prompt_of = {t: a["metadata"]["prompt_raw"] for (t, _, _), a in answers.items()}
+        prompt_of = {t: task_prompt_of(a) for (t, _, _), a in answers.items()}
         hit = [t for t in prompt_of if t in ref]
         if not hit:
             die(f"none of the {len(prompt_of)} tasks in {runs} has a gold answer in {gold}")
         for t in hit:
-            answers[(t, GOLD, 0)] = {"response": ref[t], "metadata": {"prompt_raw": prompt_of[t]}}
+            answers[(t, GOLD, 0)] = {"response": ref[t], "prompt": prompt_of[t], "metadata": {"prompt_raw": prompt_of[t]}}
         print(f"gold answers for {len(hit)} of {len(prompt_of)} tasks")
     rows = []
     for (task_id, model, sample), a in sorted(answers.items()):
@@ -148,8 +154,7 @@ def build(runs: str | Path, data: str | Path, prompt: str | Path, out: str | Pat
             die(f"task {task_id} has no rubric in {data}")
         for c in rubrics[task_id]:
             rows.append({"id": f"{task_id}|{model}|{sample}|{c['id']}",
-                         "prompt": judge_message(judge_prompt, a["metadata"]["prompt_raw"], a["response"],
-                                                 c["description"]),
+                         "prompt": judge_message(judge_prompt, task_prompt_of(a), a["response"], c["description"]),
                          "task_id": task_id, "model": model, "sample_index": sample, "criterion_id": c["id"]})
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -227,6 +232,7 @@ def score(raw: str | Path, tasks: str | Path, baseline: str, labels: str | Path 
         print("metrics wait for the full run")
         return 1
 
+    verdicts_all = dict(passed)  # every judged call, gold included: what the labels are compared against
     gold_rows = {jid: ok for jid, ok in passed.items() if cell[jid][1] == GOLD}
     if gold_rows:  # the judge on the reference answers: a check of judge and rubric, printed apart
         failed = sorted(jid for jid, ok in gold_rows.items() if not ok)
@@ -278,7 +284,7 @@ def score(raw: str | Path, tasks: str | Path, baseline: str, labels: str | Path 
         print(f"  {jid}: {' '.join(why.split())[:120]}")
     print(f"wrote {out}\n")
     if labels:
-        _labels_check(labels, passed, raw)
+        _labels_check(labels, verdicts_all, raw)
     if baseline not in models:
         die(f"--baseline {baseline!r} not in models {models}")
     rc = metrics.main([str(out), "--baseline", baseline])

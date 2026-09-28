@@ -16,7 +16,7 @@ START=$(date +%s)
 
 rsync -a \
   --exclude .git --exclude .venv --exclude results --exclude .cache --exclude __pycache__ --exclude .pytest_cache \
-  --exclude tbench-traces --exclude apex-sample --exclude apex-v1 --exclude 'deliverables*' --exclude .claude --exclude prompts/local \
+  --exclude tbench-traces --exclude apex-sample --exclude apex-v1 --exclude 'deliverables*' --exclude .claude --exclude prompts/local --exclude demo.py --exclude tests/test_demo.py \
   "$SRC/" "$DEST/"
 mkdir -p "$DEST/results"
 cd "$DEST"

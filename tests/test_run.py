@@ -513,3 +513,20 @@ def test_main_ctrl_c_during_smoke_exits_130_cleanly(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(run.llm, "smoke", interrupted_smoke)
     assert run.main([str(cfg_path), "--name", "x", "--yes"]) == 130
     assert "interrupted" in capsys.readouterr().out
+
+
+def test_load_config_system_prompt_file_strips_header(tmp_path):
+    (tmp_path / "t.jsonl").write_text('{"id": 1, "prompt": "p"}\n')
+    (tmp_path / "judge.md").write_text("<!-- source: mine -->\nYou are the judge.\n")
+    (tmp_path / "c.yaml").write_text(f"tasks: {tmp_path / 't.jsonl'}\nmodels: ['openai:gpt-5-mini']\n"
+                                     f"system_prompt_file: {tmp_path / 'judge.md'}\nmax_tokens: 10\n")
+    cfg = run.load_config(tmp_path / "c.yaml", {})
+    assert cfg.system_prompt == "You are the judge."
+
+
+def test_actual_cost_uses_pricing_per_model():
+    s = run.Summary(tokens_by_model={"openai:a": [1_000_000, 500_000], "openai:b": [10, 10], "x:nope": [5, 5]})
+    pricing = {"openai:a": {"input_per_m": 2.0, "output_per_m": 10.0}, "openai:b": {"input_per_m": 1.0, "output_per_m": 1.0}}
+    line = run.actual_cost(s, pricing)
+    assert line.startswith("$7.0000 actual on new calls (openai:a $7.0000, openai:b $0.0000)")
+    assert "no price in pricing.json for x:nope" in line
