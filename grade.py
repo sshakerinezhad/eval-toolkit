@@ -1,6 +1,6 @@
 """GRADE. Score APEX-v1 runner answers against each task's rubric criteria with an LLM judge.
 
-    python grade.py build [--runs RAW] [--data CSV] [--prompt FILE] [--out FILE]
+    python grade.py build [--runs RAW] [--data CSV] [--prompt FILE] [--out FILE] [--gold JSON]
     python grade.py score RAW [--tasks FILE] [--baseline MODEL] [--labels CSV]
     python grade.py label TASKS [--n 40] [--out CSV] [--seed 0]
     python grade.py agree RAW_A RAW_B
@@ -17,6 +17,11 @@ like Mercor's scoring, plus score_errors_dropped = met/(total - errors) -> score
 sample, score, score_errors_dropped, errors) next to RAW, one row per sample -> metrics.py: mean over samples and tasks with bootstrap CI per model, pass@k / pass^k when
 there are several samples, paired diff (other model minus --baseline) with up/down/same. metrics.json also gets a judge_errors
 block: the three counts and, per model, the mean with errors as fail and with errors dropped.
+
+build --gold: also grade the dataset's reference answers ({task_id: text}, the shape the loader prompt
+asks for) as a pretend model named "gold", sample 0. score prints gold apart (mean, criteria not met)
+and keeps it out of scores.jsonl: it checks the judge and the rubric, it is not a model to compare.
+If gold does not score near 1.0, fix the judge or the rubric before trusting any model's number.
 
 label: pick n judge calls at random from TASKS (the build output, so it works before or while the judge
 runs; the judge's raw.jsonl is accepted too), show each one (task, model, sample, criterion text, response
@@ -90,6 +95,17 @@ def load_rubrics(path: str | Path) -> dict[int, list[dict]]:
                 for r in csv.DictReader(f)}
 
 
+def load_gold(path: str | Path) -> dict[int, str]:
+    """{task_id: reference answer text} JSON -> same with int keys where the id is a number."""
+    path = Path(path)
+    if not path.exists():
+        die(f"gold answers not found: {path}")
+    gold = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(gold, dict) or not gold:
+        die(f"{path}: expected a non-empty {{task_id: text}} object")
+    return {int(k) if str(k).isdigit() else k: v for k, v in gold.items()}
+
+
 # ---------- build ----------
 
 def judge_message(judge_prompt: str, task_prompt: str, response: str | None, criterion: str) -> str:
@@ -98,10 +114,23 @@ def judge_message(judge_prompt: str, task_prompt: str, response: str | None, cri
             f"<CRITERION>\n{criterion}\n</CRITERION>")
 
 
-def build(runs: str | Path, data: str | Path, prompt: str | Path, out: str | Path) -> int:
+GOLD = "gold"
+
+
+def build(runs: str | Path, data: str | Path, prompt: str | Path, out: str | Path,
+          gold: str | Path | None = None) -> int:
     answers = load_answers(runs)
     rubrics = load_rubrics(data)
     judge_prompt = load_prompt(prompt)
+    if gold:  # reference answers ride along as model "gold", sample 0, using each task's own prompt
+        ref = load_gold(gold)
+        prompt_of = {t: a["metadata"]["prompt_raw"] for (t, _, _), a in answers.items()}
+        hit = [t for t in prompt_of if t in ref]
+        if not hit:
+            die(f"none of the {len(prompt_of)} tasks in {runs} has a gold answer in {gold}")
+        for t in hit:
+            answers[(t, GOLD, 0)] = {"response": ref[t], "metadata": {"prompt_raw": prompt_of[t]}}
+        print(f"gold answers for {len(hit)} of {len(prompt_of)} tasks")
     rows = []
     for (task_id, model, sample), a in sorted(answers.items()):
         if task_id not in rubrics:
@@ -187,6 +216,17 @@ def score(raw: str | Path, tasks: str | Path, baseline: str, labels: str | Path 
         print("metrics wait for the full run")
         return 1
 
+    gold_rows = {jid: ok for jid, ok in passed.items() if cell[jid][1] == GOLD}
+    if gold_rows:  # the judge on the reference answers: a check of judge and rubric, printed apart
+        failed = sorted(jid for jid, ok in gold_rows.items() if not ok)
+        n_tasks = len({cell[j][0] for j in gold_rows})
+        print(f"gold: tasks {n_tasks}  criteria {len(gold_rows)}  mean {sum(gold_rows.values()) / len(gold_rows):.3f}  "
+              f"not met {len(failed)}" + ("  <- judge or rubric wrong on these; check before trusting any model" if failed else ""))
+        for jid in failed[:10]:
+            print(f"  {jid}")
+        passed = {jid: ok for jid, ok in passed.items() if jid not in gold_rows}
+        if not passed:
+            die("only gold rows in the run; nothing to score")
     per: dict[tuple, list[bool]] = {}      # cell -> met flag per criterion (errors count as not met)
     errs: dict[tuple, int] = {}            # cell -> judge errors in it
     for jid, ok in passed.items():
@@ -406,6 +446,7 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--data", default="apex-v1/data/train.csv")
     b.add_argument("--prompt", default="prompts/apex_judge.md")
     b.add_argument("--out", default="results/grade_v1/tasks.jsonl")
+    b.add_argument("--gold", help="{task_id: reference answer} JSON; graded as model 'gold', reported apart")
     s = sub.add_parser("score", help="judge raw.jsonl -> scores.jsonl + metrics.json")
     s.add_argument("raw")
     s.add_argument("--tasks", default="results/grade_v1/tasks.jsonl", help="build output, checks completeness")
@@ -421,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("raw_b")
     args = ap.parse_args(argv)
     if args.cmd == "build":
-        build(args.runs, args.data, args.prompt, args.out)
+        build(args.runs, args.data, args.prompt, args.out, args.gold)
         return 0
     if args.cmd == "label":
         label(args.tasks, args.n, args.out or Path(args.tasks).parent / "labels.csv", args.seed)

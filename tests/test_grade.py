@@ -181,3 +181,25 @@ def test_score_errors_in_their_own_bucket(tmp_path, capsys):
     assert "mean score 0.875 (errors as fail)  1.000 (errors dropped)" in text
     m = json.loads((tmp_path / "metrics.json").read_text())
     assert m["judge_errors"]["timeout"] == 1 and m["judge_errors"]["per_model"]["m"]["mean_errors_dropped"] == 1.0
+
+
+def test_gold_mode_graded_apart(tmp_path, capsys):
+    raw, data, prompt = _fixture(tmp_path, n_samples=1)
+    gold = tmp_path / "gold.json"
+    gold.write_text(json.dumps({"1": "reference one", "2": "reference two"}))
+    tasks = tmp_path / "tasks.jsonl"
+    assert grade.build(raw, data, prompt, tasks, gold=gold) == 3 + 3  # model rows + gold rows
+    rows = [json.loads(l) for l in tasks.read_text().splitlines()]
+    g = [r for r in rows if r["model"] == "gold"]
+    assert len(g) == 3 and "reference one" in g[0]["prompt"] and g[0]["sample_index"] == 0
+    # judge: gold fails one criterion, the model meets everything
+    verdict = {r["id"]: not (r["model"] == "gold" and r["criterion_id"] == "c2") for r in rows}
+    judged = tmp_path / "judge_raw.jsonl"
+    _write(judged, [{"task_id": r["id"], "prompt": r["prompt"],
+                     "metadata": {k: r[k] for k in ("task_id", "model", "sample_index", "criterion_id")},
+                     "response": json.dumps({"rationale": "r", "is_criteria_true": verdict[r["id"]]})} for r in rows])
+    grade.score(judged, tasks, baseline="m")
+    text = capsys.readouterr().out
+    assert "gold: tasks 2  criteria 3  mean 0.667  not met 1" in text and "1|gold|0|c2" in text
+    scores = [json.loads(l) for l in (tmp_path / "scores.jsonl").read_text().splitlines()]
+    assert {s["variant"] for s in scores} == {"m"}  # gold never enters the comparison
