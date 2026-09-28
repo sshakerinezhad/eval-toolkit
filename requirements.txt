@@ -8,3 +8,4 @@ pytest-asyncio
 pypdf
 openpyxl
 python-docx
+matplotlib
