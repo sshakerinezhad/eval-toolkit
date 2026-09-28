@@ -1,4 +1,4 @@
-<!-- source: mine, 2026-09-28. Builder prompt: load a new dataset into the toolkit's shapes. Fill the two brackets. -->
+<!-- source: mine. Builder prompt: load a new dataset into the toolkit's shapes. Fill the two brackets. -->
 Read first, write second. No model calls.
 
 The data is at: [PATH]. The brief says: [ONE SENTENCE].

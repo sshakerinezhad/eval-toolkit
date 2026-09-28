@@ -1,4 +1,4 @@
-<!-- source: mine, 2026-09-28. Failure taxonomy over rubric criteria. Edit the category list on the day (from the brief, or from your own reading of failures.md); the code reads categories from the '- name: description' lines. -->
+<!-- source: mine. Failure taxonomy over rubric criteria. Edit the category list for the dataset (from the task, or from your own reading of failures.md); the code reads categories from the '- name: description' lines. -->
 You are given one failed rubric check: the criterion, the judge's reason it was not met, and the model's response.
 Pick exactly one category from the list below.
 Reply with one JSON object and nothing else:
