@@ -11,10 +11,12 @@ included; run.py configs can't load a system prompt from a file) + <TASK_PROMPT>
 attachments: criteria state their expected values) + <RESPONSE> + <CRITERION>. No LLM calls here.
 
 score: judge raw.jsonl from run.py -> parse {"rationale", "is_criteria_true"} per criterion
-(unparseable = fail, counted as a judge error) -> score = passed/total per (task, model, sample),
-unweighted like Mercor's scoring -> scores.jsonl (task, variant, sample, score) next to RAW, one row per
-sample -> metrics.py: mean over samples and tasks with bootstrap CI per model, pass@k / pass^k when
-there are several samples, paired diff (other model minus --baseline) with up/down/same.
+(a judge call that timed out, errored or did not parse is a judge error, kept in its own bucket:
+timeout / api_error / unparsed) -> score = met/total per (task, model, sample), errors as fail, unweighted
+like Mercor's scoring, plus score_errors_dropped = met/(total - errors) -> scores.jsonl (task, variant,
+sample, score, score_errors_dropped, errors) next to RAW, one row per sample -> metrics.py: mean over samples and tasks with bootstrap CI per model, pass@k / pass^k when
+there are several samples, paired diff (other model minus --baseline) with up/down/same. metrics.json also gets a judge_errors
+block: the three counts and, per model, the mean with errors as fail and with errors dropped.
 
 label: pick n judge calls at random from TASKS (the build output, so it works before or while the judge
 runs; the judge's raw.jsonl is accepted too), show each one (task, model, sample, criterion text, response
@@ -122,6 +124,16 @@ def build(runs: str | Path, data: str | Path, prompt: str | Path, out: str | Pat
 
 # ---------- score ----------
 
+def error_kind(row: dict) -> str:
+    """Why a judge row has no verdict: timeout (or connection), api_error (any other failed call), unparsed (text came back)."""
+    if isinstance(row.get("response"), str):
+        return "unparsed"
+    types = {e.get("type", "") for e in row.get("errors") or []}
+    if any("Timeout" in t or "Connection" in t for t in types):
+        return "timeout"
+    return "api_error"
+
+
 def parse_verdict(text: str | None) -> tuple[bool | None, str]:
     """Judge reply -> (is_criteria_true, rationale). None = unparseable (caller counts it as a fail)."""
     if not isinstance(text, str):
@@ -151,6 +163,7 @@ def score(raw: str | Path, tasks: str | Path, baseline: str, labels: str | Path 
     expected = {json.loads(l)["id"] for l in tasks.read_text(encoding="utf-8").splitlines() if l.strip()}
     passed: dict[str, bool] = {}    # judge task id -> criterion met
     cell: dict[str, tuple] = {}     # judge task id -> (task_id, model, sample_index)
+    kind: dict[str, str] = {}       # judge task id -> "timeout" / "api_error" / "unparsed" when the verdict is missing
     errors = []
     for n, line in enumerate(raw.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
@@ -161,7 +174,8 @@ def score(raw: str | Path, tasks: str | Path, baseline: str, labels: str | Path 
             die(f"{raw}:{n}: metadata lacks task_id/model/criterion_id; tasks not made by grade.py build?")
         verdict, why = parse_verdict(row.get("response"))
         if verdict is None:
-            errors.append((row["task_id"], why))
+            kind[row["task_id"]] = error_kind(row)
+            errors.append((row["task_id"], f"{kind[row['task_id']]}: {why}"))
         passed[row["task_id"]] = bool(verdict)
         cell[row["task_id"]] = (meta["task_id"], meta["model"], meta.get("sample_index", 0))
     missing = expected - set(passed)
@@ -173,26 +187,42 @@ def score(raw: str | Path, tasks: str | Path, baseline: str, labels: str | Path 
         print("metrics wait for the full run")
         return 1
 
-    per: dict[tuple, list[bool]] = {}
+    per: dict[tuple, list[bool]] = {}      # cell -> met flag per criterion (errors count as not met)
+    errs: dict[tuple, int] = {}            # cell -> judge errors in it
     for jid, ok in passed.items():
         per.setdefault(cell[jid], []).append(ok)
+        errs[cell[jid]] = errs.get(cell[jid], 0) + (jid in kind)
+    def dropped(c: tuple) -> float | None:  # met / (total - errors); None when every criterion errored
+        good = len(per[c]) - errs[c]
+        return sum(per[c]) / good if good else None
     out = raw.parent / "scores.jsonl"
-    out.write_text("".join(json.dumps({"task": t, "variant": m, "sample": i, "score": sum(v) / len(v)}) + "\n"
+    out.write_text("".join(json.dumps({"task": t, "variant": m, "sample": i, "score": sum(v) / len(v),
+                                       "score_errors_dropped": dropped((t, m, i)), "errors": errs[(t, m, i)]}) + "\n"
                            for (t, m, i), v in sorted(per.items())), encoding="utf-8")
 
+    counts = {k: sum(v == k for v in kind.values()) for k in ("timeout", "api_error", "unparsed")}
+    per_model: dict[str, dict] = {}
     models = sorted({m for _, m, _ in per})
     for m in models:
-        by_task: dict[int, list[float]] = {}  # task -> score of each sample
-        for (t, mm, _), v in per.items():
-            if mm == m:
-                by_task.setdefault(t, []).append(sum(v) / len(v))
+        by_task: dict[int, list[float]] = {}  # task -> score of each sample, errors as fail
+        drop: list[float] = []                # cell scores with errors dropped, where defined
+        for c, v in per.items():
+            if c[1] == m:
+                by_task.setdefault(c[0], []).append(sum(v) / len(v))
+                if dropped(c) is not None:
+                    drop.append(dropped(c))
         task_means = [sum(x) / len(x) for x in by_task.values()]
         spread = [max(x) - min(x) for x in by_task.values()]  # per-task gap between best and worst sample
         n_samples = max(len(x) for x in by_task.values())
-        print(f"{m:24s} tasks {len(by_task)}  samples/task {n_samples}  mean score {sum(task_means) / len(task_means):.3f}  "
-              f"all criteria met {sum(s == 1.0 for s in task_means)}  "
+        mean_fail = sum(task_means) / len(task_means)
+        mean_drop = sum(drop) / len(drop) if drop else None
+        per_model[m] = {"mean_errors_as_fail": mean_fail, "mean_errors_dropped": mean_drop,
+                        "cells_all_errors": sum(dropped(c) is None for c in per if c[1] == m)}
+        print(f"{m:24s} tasks {len(by_task)}  samples/task {n_samples}  mean score {mean_fail:.3f} (errors as fail)  "
+              f"{_fmt_opt(mean_drop)} (errors dropped)  all criteria met {sum(s == 1.0 for s in task_means)}  "
               f"mean spread over samples {sum(spread) / len(spread):.3f}")
-    print(f"judge_errors (unparseable, counted as fail): {len(errors)}")
+    print(f"judge errors: timeouts {counts['timeout']}  api errors {counts['api_error']}  unparsed {counts['unparsed']}  "
+          f"(counted as fail in `score`, dropped from the denominator in `score_errors_dropped`)")
     for jid, why in errors[:10]:
         print(f"  {jid}: {' '.join(why.split())[:120]}")
     print(f"wrote {out}\n")
@@ -200,7 +230,13 @@ def score(raw: str | Path, tasks: str | Path, baseline: str, labels: str | Path 
         _labels_check(labels, passed, raw)
     if baseline not in models:
         die(f"--baseline {baseline!r} not in models {models}")
-    return metrics.main([str(out), "--baseline", baseline])
+    rc = metrics.main([str(out), "--baseline", baseline])
+    mpath = raw.parent / "metrics.json"
+    if mpath.exists():  # add the error bucket beside metrics.py's numbers
+        m = json.loads(mpath.read_text(encoding="utf-8"))
+        m["judge_errors"] = {**counts, "per_model": per_model}
+        mpath.write_text(json.dumps(m, indent=2), encoding="utf-8")
+    return rc
 
 
 # ---------- labels ----------

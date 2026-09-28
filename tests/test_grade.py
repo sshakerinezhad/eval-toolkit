@@ -155,3 +155,29 @@ def test_score_mid_run_reports_progress_and_partial_labels(tmp_path, capsys):
     assert "judge not finished: 4 of 6" in text and "without a judge verdict yet: 1 of 2" in text
     assert "judge vs you: n 1" in text and "metrics wait for the full run" in text
     assert not (tmp_path / "scores.jsonl").exists()
+
+
+def test_error_kind():
+    assert grade.error_kind({"response": "not json"}) == "unparsed"
+    assert grade.error_kind({"response": None, "errors": [{"type": "APITimeoutError"}]}) == "timeout"
+    assert grade.error_kind({"response": None, "errors": [{"type": "RateLimitError"}]}) == "api_error"
+
+
+def test_score_errors_in_their_own_bucket(tmp_path, capsys):
+    # task 1 sample 0: c1 met, c2 timed out -> score 0.5 as fail, 1.0 dropped; everything else met
+    judged, tasks = _judged(tmp_path, {**ALL_MET, "1|m|0|c2": "garbage"})
+    rows = [json.loads(l) for l in judged.read_text().splitlines()]
+    for r in rows:
+        if r["task_id"] == "1|m|0|c2":
+            r["response"] = None
+            r["errors"] = [{"type": "APITimeoutError"}]
+    _write(judged, rows)
+    grade.score(judged, tasks, baseline="m")
+    scores = {(s["task"], s["sample"]): s for s in map(json.loads, (tmp_path / "scores.jsonl").read_text().splitlines())}
+    assert scores[(1, 0)]["score"] == 0.5 and scores[(1, 0)]["score_errors_dropped"] == 1.0 and scores[(1, 0)]["errors"] == 1
+    assert scores[(2, 0)]["errors"] == 0
+    text = capsys.readouterr().out
+    assert "judge errors: timeouts 1  api errors 0  unparsed 0" in text
+    assert "mean score 0.875 (errors as fail)  1.000 (errors dropped)" in text
+    m = json.loads((tmp_path / "metrics.json").read_text())
+    assert m["judge_errors"]["timeout"] == 1 and m["judge_errors"]["per_model"]["m"]["mean_errors_dropped"] == 1.0
